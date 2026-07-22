@@ -16,7 +16,7 @@ final class AppModel {
   }
 
   var state: State = .idle
-  var title = "Meeting"
+  var title = ""
   var elapsed: TimeInterval = 0
   var recentTurns: [TranscriptTurn] = []
   var statusText = "Ready"
@@ -209,7 +209,7 @@ final class AppModel {
   func recordDetectedMeeting() {
     guard state == .idle else { return }
     let app = detectedMeetingApp
-    if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title == "Meeting",
+    if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       let app
     {
       title = "\(app) meeting"
@@ -1022,7 +1022,7 @@ final class AppModel {
 
   private func recreateMeetingNotesFile(_ meeting: TodayMeetingSummary) async {
     state = .processing
-    statusText = "Recreating meeting notes…"
+    statusText = "Recreating summary…"
     do {
       let (document, folder) = try await store.loadCompletedMeeting(id: meeting.id)
       guard document.transcriptDeletedAt == nil, !document.transcript.isEmpty else {
@@ -1040,13 +1040,13 @@ final class AppModel {
       await refreshMeetingDay()
       state = .idle
       if let syncError = await remoteSync.lastError {
-        statusText = "Meeting notes recreated locally; archive update pending: \(syncError)"
+        statusText = "Summary recreated locally; archive update pending: \(syncError)"
       } else {
-        showTransientStatus("Meeting notes recreated and synced")
+        showTransientStatus("Summary recreated and synced")
       }
     } catch {
       state = .idle
-      statusText = "Could not recreate meeting notes: \(error.localizedDescription)"
+      statusText = "Could not recreate the summary: \(error.localizedDescription)"
     }
   }
 
@@ -1262,6 +1262,7 @@ final class AppModel {
       enrichmentRetryAvailable = insights == nil
       selectedMeetingDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
       await refreshMeetingDay()
+      title = ""
       await loadCalendarSuggestion()
     } catch {
       try? await store.setStatus(.failed)

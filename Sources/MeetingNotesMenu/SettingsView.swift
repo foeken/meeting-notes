@@ -39,8 +39,8 @@ struct SettingsView: View {
       .background(Color(nsColor: .windowBackgroundColor))
     }
     .frame(
-      minWidth: 700, idealWidth: 760, maxWidth: .infinity,
-      minHeight: 480, idealHeight: 540, maxHeight: .infinity)
+      minWidth: 780, idealWidth: 860, maxWidth: .infinity,
+      minHeight: 560, idealHeight: 640, maxHeight: .infinity)
     .background(SettingsWindowConfigurator())
     .onAppear { selection = .general }
   }
@@ -48,16 +48,77 @@ struct SettingsView: View {
   @ViewBuilder
   private func sidebarLabel(for pane: SettingsPane) -> some View {
     if pane == .codex {
-      Label {
-        Text(pane.title)
-      } icon: {
-        CodexAppIcon(
-          size: 16,
-          color: selection == pane ? .white : .accentColor)
-      }
+      CodexSidebarLabel(title: pane.title, isSelected: selection == pane)
     } else {
       Label(pane.title, systemImage: pane.systemImage)
     }
+  }
+}
+
+private struct CodexSidebarLabel: View {
+  let title: String
+  let isSelected: Bool
+  @State private var windowIsKey = true
+
+  private var isHighlighted: Bool { isSelected && windowIsKey }
+
+  var body: some View {
+    Label {
+      if isHighlighted {
+        Text(title)
+      } else {
+        Text(title)
+          .font(.body.weight(.regular))
+      }
+    } icon: {
+      CodexAppIcon(
+        size: 16,
+        color: isHighlighted ? .white : .accentColor)
+    }
+    .background(WindowKeyObserver(isKey: $windowIsKey))
+  }
+}
+
+private struct WindowKeyObserver: NSViewRepresentable {
+  @Binding var isKey: Bool
+
+  func makeNSView(context: Context) -> KeyObservingView {
+    let view = KeyObservingView()
+    view.onChange = { isKey = $0 }
+    return view
+  }
+
+  func updateNSView(_ nsView: KeyObservingView, context: Context) {
+    nsView.onChange = { isKey = $0 }
+  }
+
+  final class KeyObservingView: NSView {
+    var onChange: ((Bool) -> Void)?
+    nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      observers.forEach(NotificationCenter.default.removeObserver)
+      observers.removeAll()
+      guard let window else { return }
+      let center = NotificationCenter.default
+      let initialState = window.isKeyWindow
+      DispatchQueue.main.async { [weak self] in self?.onChange?(initialState) }
+      observers.append(
+        center.addObserver(
+          forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in
+          MainActor.assumeIsolated { self?.onChange?(true) }
+        })
+      observers.append(
+        center.addObserver(
+          forName: NSWindow.didResignKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in
+          MainActor.assumeIsolated { self?.onChange?(false) }
+        })
+    }
+
+    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
   }
 }
 
@@ -236,7 +297,7 @@ private struct CodexSettingsPane: View {
             .font(.system(.body, design: .monospaced))
             .scrollContentBackground(.hidden)
             .padding(8)
-            .frame(minHeight: 300)
+            .frame(height: 300)
             .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
             .overlay {
               RoundedRectangle(cornerRadius: 8)
@@ -1097,13 +1158,13 @@ private final class SettingsWindowHostView: NSView {
     window.title = "Meeting Notes Settings"
     window.titleVisibility = .hidden
     window.isMovableByWindowBackground = false
-    window.minSize = NSSize(width: 700, height: 480)
+    window.minSize = NSSize(width: 780, height: 560)
     let sizingVersionKey = "settingsWindowSizingVersion"
-    if UserDefaults.standard.integer(forKey: sizingVersionKey) < 5 {
-      window.setContentSize(NSSize(width: 760, height: 540))
+    if UserDefaults.standard.integer(forKey: sizingVersionKey) < 6 {
+      window.setContentSize(NSSize(width: 860, height: 640))
       window.center()
       if !ProcessInfo.processInfo.arguments.contains("--ui-test") {
-        UserDefaults.standard.set(5, forKey: sizingVersionKey)
+        UserDefaults.standard.set(6, forKey: sizingVersionKey)
       }
     }
     NSApp.activate(ignoringOtherApps: true)

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT=${0:A:h:h}
-APP="$ROOT/MeetingNotesMenu.app"
+APP="$ROOT/Meeting Notes.app"
 EXECUTABLE="$APP/Contents/MacOS/MeetingNotesMenu"
 POINTER="$HOME/Library/Application Support/MeetingNotesMenu/Spool/current.json"
 

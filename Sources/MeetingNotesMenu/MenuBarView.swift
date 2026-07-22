@@ -337,7 +337,7 @@ struct MenuBarView: View {
                   model.recreateMeetingNotes(meeting)
                 } label: {
                   Label(
-                    meeting.summary == nil ? "Create meeting notes" : "Recreate meeting notes",
+                    meeting.summary == nil ? "Create summary" : "Recreate summary",
                     systemImage: meeting.summary == nil ? "sparkles" : "arrow.clockwise")
                 }
                 Divider()

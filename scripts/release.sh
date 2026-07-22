@@ -9,7 +9,7 @@ RELEASE_REPO=${MEETING_NOTES_RELEASE_REPO:-foeken/meeting-notes-menu}
 NOTARY_PROFILE=${MEETING_NOTES_NOTARY_PROFILE:?set MEETING_NOTES_NOTARY_PROFILE to a notarytool Keychain profile}
 IDENTITY=${MEETING_NOTES_CODE_SIGN_IDENTITY:-}
 SPARKLE_BIN="$ROOT/.build/artifacts/sparkle/Sparkle/bin"
-APP="$ROOT/MeetingNotesMenu.app"
+APP="$ROOT/Meeting Notes.app"
 ARCHIVE_NAME="MeetingNotes-$VERSION.zip"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT

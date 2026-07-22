@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT=${0:A:h:h}
-APP="$ROOT/MeetingNotesMenu.app"
+APP="$ROOT/Meeting Notes.app"
 ARCH=$(uname -m)
 
 swift build --package-path "$ROOT" -c release
@@ -27,6 +27,7 @@ if [[ "$IDENTITY" == "-" ]]; then
     --requirements '=designated => identifier "app.meetingnotes.menu"' "$APP"
   echo "warning: ad-hoc signed; set MEETING_NOTES_CODE_SIGN_IDENTITY to an Apple Development identity for the most stable permissions" >&2
 else
-  codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP"
+  codesign --force --deep --options runtime --timestamp \
+    --entitlements "$ROOT/Resources/Entitlements.plist" --sign "$IDENTITY" "$APP"
 fi
 echo "$APP"

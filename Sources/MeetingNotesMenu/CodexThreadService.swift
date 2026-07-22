@@ -4,20 +4,28 @@ import SwiftUI
 
 struct CodexAppIcon: View {
   let size: CGFloat
-  var color: Color = .primary
+  var color: Color?
 
   var body: some View {
     Group {
       if let icon = CodexThreadService.logoImage() {
-        Image(nsImage: icon)
+        let image = Image(nsImage: icon)
           .resizable()
           .renderingMode(.template)
           .scaledToFit()
-          .foregroundStyle(color)
+        if let color {
+          image.foregroundStyle(color)
+        } else {
+          image
+        }
       } else {
-        Image(systemName: "sparkle")
+        let fallback = Image(systemName: "sparkle")
           .font(.system(size: size * 0.62, weight: .semibold))
-          .foregroundStyle(color)
+        if let color {
+          fallback.foregroundStyle(color)
+        } else {
+          fallback
+        }
       }
     }
     .frame(width: size, height: size)
