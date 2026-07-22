@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleDisplayName</key><string>Meeting Notes</string>
+    <key>CFBundleExecutable</key><string>MeetingNotesMenu</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIdentifier</key><string>app.meetingnotes.menu</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>app.meetingnotes.menu.tana-oauth</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>meetingnotesmenu</string></array>
+        </dict>
+    </array>
+    <key>CFBundleName</key><string>Meeting Notes</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.2.0</string>
+    <key>CFBundleVersion</key><string>2</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSUIElement</key><true/>
+    <key>NSCalendarsFullAccessUsageDescription</key><string>Meeting Notes uses your calendar to suggest the current meeting title.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Meeting Notes records your microphone for local transcription.</string>
+    <key>NSScreenCaptureUsageDescription</key><string>Meeting Notes captures system audio from calls for local transcription.</string>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>SUFeedURL</key><string>https://raw.githubusercontent.com/foeken/meeting-notes-menu/main/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>+ugHEdgTcOnX+rridIwktMlQqu8Q3drmDCQgw3noUBc=</string>
+    <key>SUEnableAutomaticChecks</key><true/>
+</dict>
+</plist>

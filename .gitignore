@@ -1,0 +1,8 @@
+.build/
+.env
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+MeetingNotesMenu.app/
+meeting-notes-menu.zip
