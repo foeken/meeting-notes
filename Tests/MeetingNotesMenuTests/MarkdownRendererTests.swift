@@ -651,7 +651,7 @@ import Testing
     transcript: [
       TranscriptTurn(
         start: 0, end: 2, speaker: "You",
-        text: "Jamey will review the Atlas proposal tomorrow.", source: .microphone)
+        text: "Jami will review the Atlas proposal tomorrow.", source: .microphone)
     ])
 
   let matches = TanaEntityMatcher.relevantNames(
