@@ -10,7 +10,7 @@ NOTARY_PROFILE=${MEETING_NOTES_NOTARY_PROFILE:?set MEETING_NOTES_NOTARY_PROFILE 
 IDENTITY=${MEETING_NOTES_CODE_SIGN_IDENTITY:-}
 SPARKLE_BIN="$ROOT/.build/artifacts/sparkle/Sparkle/bin"
 APP="$ROOT/Meeting Notes.app"
-ARCHIVE_NAME="MeetingNotes-$VERSION.zip"
+ARCHIVE_NAME="MeetingNotes-$VERSION.dmg"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
@@ -55,10 +55,19 @@ export MEETING_NOTES_CODE_SIGN_IDENTITY="$IDENTITY"
 "$ROOT/scripts/build-app.sh"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
-/usr/bin/ditto -c -k --keepParent "$APP" "$WORK/$ARCHIVE_NAME"
-xcrun notarytool submit "$WORK/$ARCHIVE_NAME" --keychain-profile "$NOTARY_PROFILE" --wait
+/usr/bin/ditto -c -k --keepParent "$APP" "$WORK/MeetingNotes-notarize.zip"
+xcrun notarytool submit "$WORK/MeetingNotes-notarize.zip" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$APP"
-/usr/bin/ditto -c -k --keepParent "$APP" "$WORK/$ARCHIVE_NAME"
+
+mkdir -p "$WORK/dmg-root"
+cp -R "$APP" "$WORK/dmg-root/"
+ln -sf /Applications "$WORK/dmg-root/Applications"
+hdiutil create -volname "Meeting Notes" \
+  -srcfolder "$WORK/dmg-root" \
+  -ov -format UDZO \
+  "$WORK/$ARCHIVE_NAME"
+xcrun notarytool submit "$WORK/$ARCHIVE_NAME" --keychain-profile "$NOTARY_PROFILE" --wait
+xcrun stapler staple "$WORK/$ARCHIVE_NAME"
 
 mkdir -p "$WORK/appcast-source"
 cp "$WORK/$ARCHIVE_NAME" "$WORK/appcast-source/$ARCHIVE_NAME"
