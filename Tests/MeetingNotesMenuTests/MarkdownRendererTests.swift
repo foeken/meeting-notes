@@ -526,6 +526,53 @@ import Testing
   #expect(await store.latestRecoverableFolder() == nil)
 }
 
+@Test func failedMeetingWithSilentAudioRemainsVisibleButIsNotRecoverable() async throws {
+  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: root, sync: sync)
+  let meeting = try await store.begin(title: "Interrupted", calendar: nil)
+  let microphone = try #require(await store.audioURL(named: "microphone.wav"))
+  let handle = try WavFile.create(at: microphone)
+  let silence = Data(repeating: 0, count: 3_200)
+  try handle.write(contentsOf: silence)
+  try WavFile.finalize(handle, bytes: silence.count)
+  try await store.setStatus(.failed)
+
+  #expect(await store.meetingsForDisplay(on: meeting.startedAt).map(\.id) == [meeting.id])
+  #expect(await store.latestRecoverableFolder() == nil)
+  #expect(await store.recoverableFolder(id: meeting.id) == nil)
+}
+
+@Test func recoveryCanTargetASpecificMeeting() async throws {
+  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: root, sync: sync)
+
+  let first = try await store.begin(title: "First interrupted", calendar: nil)
+  let firstFolder = try #require(await store.currentFolder())
+  let firstHandle = try WavFile.create(at: firstFolder.appending(path: "microphone.wav"))
+  let signal = Data(repeating: 1, count: 6_400)
+  try firstHandle.write(contentsOf: signal)
+  try WavFile.finalize(firstHandle, bytes: signal.count)
+  #expect(WavFile.hasMeaningfulSignal(at: firstFolder.appending(path: "microphone.wav")))
+  try await store.setStatus(.failed)
+
+  _ = try await store.begin(title: "Second interrupted", calendar: nil)
+  let secondFolder = try #require(await store.currentFolder())
+  let secondHandle = try WavFile.create(at: secondFolder.appending(path: "microphone.wav"))
+  try secondHandle.write(contentsOf: signal)
+  try WavFile.finalize(secondHandle, bytes: signal.count)
+  #expect(WavFile.hasMeaningfulSignal(at: secondFolder.appending(path: "microphone.wav")))
+  try await store.setStatus(.failed)
+
+  let targeted = await store.recoverableFolder(id: first.id)
+  let latest = await store.latestRecoverableFolder()
+  #expect(targeted?.standardizedFileURL.path == firstFolder.standardizedFileURL.path)
+  #expect(latest?.standardizedFileURL.path == secondFolder.standardizedFileURL.path)
+}
+
 @Test func activelyManagedMeetingsAreExcludedFromRecovery() async throws {
   let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
@@ -846,6 +893,21 @@ import Testing
 
   #expect(choices.map(\.name) == ["Person", "team"])
   #expect(choices.first(where: { $0.id == "team" })?.tagIDs == ["team-a", "team-b"])
+}
+
+@Test func tanaSupertagChoicesPutSelectedGroupsFirst() {
+  let choices = TanaSupertagChoice.grouped([
+    TanaSupertag(id: "company", name: "Company", color: nil),
+    TanaSupertag(id: "person-a", name: "Person", color: nil),
+    TanaSupertag(id: "person-b", name: " person ", color: nil),
+    TanaSupertag(id: "project", name: "Project", color: nil),
+    TanaSupertag(id: "team", name: "Team", color: nil),
+  ])
+
+  let sorted = TanaSupertagChoice.selectedFirst(
+    choices, selectedTagIDs: ["team", "person-b"])
+
+  #expect(sorted.map(\.name) == ["Person", "Team", "Company", "Project"])
 }
 
 @Test func audioRetentionDefaultsOffAndRoundTrips() throws {

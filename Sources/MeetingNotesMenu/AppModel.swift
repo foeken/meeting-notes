@@ -68,7 +68,9 @@ final class AppModel {
   var codexPromptStatusText = ""
 
   var tanaSupertagChoices: [TanaSupertagChoice] {
-    TanaSupertagChoice.grouped(tanaSupertags)
+    TanaSupertagChoice.selectedFirst(
+      TanaSupertagChoice.grouped(tanaSupertags),
+      selectedTagIDs: tanaSelectedSupertagIDs)
   }
 
   private let calendar = CalendarService()
@@ -127,11 +129,6 @@ final class AppModel {
     tanaWorkspaceID = tanaSettings.workspaceID ?? ""
     tanaWorkspaceName = tanaSettings.workspaceName ?? ""
     tanaSelectedSupertagIDs = tanaSettings.selectedSupertagIDs
-    microphone.onSamples = { [live] samples in
-      Task { await live.append(samples, source: .microphone) }
-    }
-    systemAudio.onSamples = { [live] samples in Task { await live.append(samples, source: .system) }
-    }
     Task { [transcriber] in try? await transcriber.prepare() }
     let notifications = NSWorkspace.shared.notificationCenter
     workspaceObservers.append(
@@ -507,13 +504,14 @@ final class AppModel {
 
   func refreshMeetingDay() async {
     let requestedDate = selectedMeetingDate
-    let completed = await store.completedMeetings(on: requestedDate).map {
+    let completed = await store.meetingsForDisplay(on: requestedDate).map {
       TodayMeetingSummary(
         id: $0.id,
         title: $0.title,
         startedAt: $0.startedAt,
         endedAt: $0.endedAt,
-        summary: $0.insights?.summary
+        summary: $0.insights?.summary,
+        status: $0.status
       )
     }
     guard Calendar.autoupdatingCurrent.isDate(requestedDate, inSameDayAs: selectedMeetingDate)
@@ -547,7 +545,8 @@ final class AppModel {
       title: document.title,
       startedAt: document.startedAt,
       endedAt: document.endedAt ?? Date(),
-      summary: nil
+      summary: nil,
+      status: .processing
     )
     pendingMeetingSummaries[pending.id] = pending
     selectedMeetingDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
@@ -557,6 +556,10 @@ final class AppModel {
 
   func isMeetingFinalizing(_ meeting: TodayMeetingSummary) -> Bool {
     pendingMeetingSummaries[meeting.id] != nil
+  }
+
+  func isMeetingRecoverable(_ meeting: TodayMeetingSummary) -> Bool {
+    meeting.status != .complete && !isMeetingFinalizing(meeting)
   }
 
   /// Meetings the app is actively capturing or finalizing in the background.
@@ -578,6 +581,8 @@ final class AppModel {
   var canSaveArchiveSettings: Bool {
     archiveSettingsValidationError == nil && (state == .idle || isFailed)
   }
+
+  var canManageMeetings: Bool { state == .idle || isFailed }
 
   var canTestPostMeetingHook: Bool {
     canSaveArchiveSettings
@@ -1023,7 +1028,7 @@ final class AppModel {
   }
 
   func requestMeetingDeletion(_ meeting: TodayMeetingSummary) {
-    guard state == .idle else { return }
+    guard canManageMeetings else { return }
     meetingPendingRename = nil
     meetingPendingDeletion = meeting
   }
@@ -1033,7 +1038,7 @@ final class AppModel {
   }
 
   func confirmMeetingDeletion() {
-    guard state == .idle, let meeting = meetingPendingDeletion else { return }
+    guard canManageMeetings, let meeting = meetingPendingDeletion else { return }
     meetingPendingDeletion = nil
     Task { await deleteMeeting(meeting) }
   }
@@ -1042,7 +1047,7 @@ final class AppModel {
     state = .processing
     statusText = "Deleting \(meeting.title)…"
     do {
-      try await store.deleteCompletedMeeting(id: meeting.id)
+      try await store.deleteMeeting(id: meeting.id)
       await refreshMeetingDay()
       state = .idle
       showTransientStatus("Deleted from Laptop and \(archiveDisplayName)")
@@ -1217,7 +1222,7 @@ final class AppModel {
         let systemURL = await store.audioURL(named: "system.wav")
       else { throw CocoaError(.fileNoSuchFile) }
 
-      await live.start { [weak self, store] turn in
+      let liveSessionID = await live.start { [weak self, store] turn in
         try? await store.append(turn)
         await MainActor.run {
           self?.recentTurns.append(turn)
@@ -1225,6 +1230,12 @@ final class AppModel {
             self?.recentTurns.removeFirst(count - 4)
           }
         }
+      }
+      microphone.onSamples = { [live] samples in
+        Task { await live.append(samples, source: .microphone, sessionID: liveSessionID) }
+      }
+      systemAudio.onSamples = { [live] samples in
+        Task { await live.append(samples, source: .system, sessionID: liveSessionID) }
       }
       captureClock.start()
       microphone.usePreferredDevice(MicrophoneSettingsStore.preferredDeviceUID())
@@ -1245,6 +1256,8 @@ final class AppModel {
     } catch {
       _ = try? microphone.stop()
       _ = try? await systemAudio.stop()
+      microphone.onSamples = nil
+      systemAudio.onSamples = nil
       await live.finish()
       captureClock.reset()
       recordingWakeLock.release()
@@ -1344,6 +1357,8 @@ final class AppModel {
       guard let microphoneURL = try microphone.stop(),
         let systemURL = try await systemAudio.stop()
       else { throw CocoaError(.fileNoSuchFile) }
+      microphone.onSamples = nil
+      systemAudio.onSamples = nil
       await live.finish()
       let stoppedMeeting = try await store.prepareForFinalization()
       activeRecordingMeetingID = nil
@@ -1480,13 +1495,25 @@ final class AppModel {
   }
 
   func recoverLatestMeeting() {
-    Task { await recover() }
+    Task { await recover(meetingID: nil) }
   }
 
-  private func recover() async {
-    guard let folder = await store.latestRecoverableFolder(excluding: activelyManagedMeetingIDs)
-    else {
+  func recoverMeeting(_ meeting: TodayMeetingSummary) {
+    Task { await recover(meetingID: meeting.id) }
+  }
+
+  private func recover(meetingID: UUID?) async {
+    let folder = if let meetingID {
+      await store.recoverableFolder(id: meetingID, excluding: activelyManagedMeetingIDs)
+    } else {
+      await store.latestRecoverableFolder(excluding: activelyManagedMeetingIDs)
+    }
+    guard let folder else {
       recoverableMeetingAvailable = false
+      if meetingID != nil {
+        state = .idle
+        statusText = "No usable speech was captured for this meeting"
+      }
       return
     }
     state = .processing

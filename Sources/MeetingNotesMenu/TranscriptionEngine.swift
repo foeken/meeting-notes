@@ -200,28 +200,33 @@ actor LiveTranscriptionEngine {
   ]
   private var onTurn: TurnHandler?
   private var running = false
+  private var sessionID: UUID?
 
   init(transcriber: NemotronTranscriber) {
     self.transcriber = transcriber
   }
 
-  func start(onTurn: @escaping TurnHandler) {
+  @discardableResult
+  func start(onTurn: @escaping TurnHandler) -> UUID {
+    let sessionID = UUID()
     states = [.microphone: StreamState(), .system: StreamState()]
     self.onTurn = onTurn
+    self.sessionID = sessionID
     running = true
+    return sessionID
   }
 
-  func append(_ samples: [Int16], source: TranscriptTurn.Source) async {
-    guard running, !samples.isEmpty else { return }
+  func append(_ samples: [Int16], source: TranscriptTurn.Source, sessionID: UUID) async {
+    guard running, self.sessionID == sessionID, !samples.isEmpty else { return }
     var state = states[source, default: StreamState()]
     let shouldDrain = state.queue.enqueue(samples)
     states[source] = state
     guard shouldDrain else { return }
-    await drain(source: source)
+    await drain(source: source, sessionID: sessionID)
   }
 
-  private func drain(source: TranscriptTurn.Source) async {
-    while running {
+  private func drain(source: TranscriptTurn.Source, sessionID: UUID) async {
+    while running, self.sessionID == sessionID {
       var state = states[source, default: StreamState()]
       guard let samples = state.queue.takeNext() else {
         state.queue.finishDraining()
@@ -237,41 +242,46 @@ actor LiveTranscriptionEngine {
           manager = existing
         } else {
           manager = try await transcriber.makeSession()
+          guard running, self.sessionID == sessionID else { return }
           states[source, default: StreamState()].manager = manager
         }
         let floatSamples = samples.map { Float($0) / 32_768 }
         _ = try await manager.process(samples: floatSamples)
+        guard running, self.sessionID == sessionID else { return }
         let partial = await manager.getPartialTranscript()
-        await emitNewText(partial, source: source)
+        guard running, self.sessionID == sessionID else { return }
+        await emitNewText(partial, source: source, sessionID: sessionID)
       } catch {
         // The WAV capture remains the source of truth. Finalization retries with
         // a fresh Nemotron session if a live preview prediction fails.
+        guard running, self.sessionID == sessionID else { return }
         states[source, default: StreamState()].manager = nil
       }
     }
 
+    guard self.sessionID == sessionID else { return }
     var state = states[source, default: StreamState()]
     state.queue.cancel()
     states[source] = state
   }
 
-  func finish() async {
+  /// Stops accepting preview audio immediately. Final transcription uses the
+  /// durable WAV files, so stopping a meeting must never wait for an in-flight
+  /// Core ML preview prediction to finish.
+  func finish() {
     running = false
+    sessionID = nil
     for source in [TranscriptTurn.Source.microphone, .system] {
-      while states[source]?.queue.isDraining == true {
-        try? await Task.sleep(for: .milliseconds(10))
-      }
-    }
-    for source in [TranscriptTurn.Source.microphone, .system] {
-      guard let manager = states[source]?.manager else { continue }
-      if let finalText = try? await manager.finish() {
-        await emitNewText(finalText, source: source)
-      }
+      states[source, default: StreamState()].queue.cancel()
+      states[source, default: StreamState()].manager = nil
     }
     onTurn = nil
   }
 
-  private func emitNewText(_ currentText: String, source: TranscriptTurn.Source) async {
+  private func emitNewText(
+    _ currentText: String, source: TranscriptTurn.Source, sessionID: UUID
+  ) async {
+    guard running, self.sessionID == sessionID else { return }
     var state = states[source, default: StreamState()]
     let delta = NemotronTranscriber.appendedText(previous: state.transcript, current: currentText)
     state.transcript = currentText.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -256,14 +256,24 @@ actor MeetingStore {
   }
 
   func latestRecoverableFolder(excluding excludedIDs: Set<UUID> = []) -> URL? {
+    recoverableFolders(excluding: excludedIDs).first?.folder
+  }
+
+  func recoverableFolder(id: UUID, excluding excludedIDs: Set<UUID> = []) -> URL? {
+    recoverableFolders(excluding: excludedIDs).first { $0.document.id == id }?.folder
+  }
+
+  private func recoverableFolders(
+    excluding excludedIDs: Set<UUID> = []
+  ) -> [(folder: URL, document: MeetingDocument, modifiedAt: Date)] {
     let manager = FileManager.default
     guard
       let enumerator = manager.enumerator(
         at: root, includingPropertiesForKeys: [.contentModificationDateKey])
-    else { return nil }
+    else { return [] }
     return enumerator.compactMap { $0 as? URL }
       .filter { $0.lastPathComponent == "meeting.json" }
-      .compactMap { url -> (URL, Date)? in
+      .compactMap { url -> (URL, MeetingDocument, Date)? in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
           !excludedIDs.contains(document.id),
@@ -274,12 +284,18 @@ actor MeetingStore {
         let date =
           (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
           ?? .distantPast
-        return (url.deletingLastPathComponent(), date)
+        return (url.deletingLastPathComponent(), document, date)
       }
-      .max(by: { $0.1 < $1.1 })?.0
+      .sorted { $0.2 > $1.2 }
   }
 
   private static func hasRecoverableAudio(in folder: URL) -> Bool {
+    ["microphone.wav", "system.wav"].contains { name in
+      WavFile.hasMeaningfulSignal(at: folder.appending(path: name))
+    }
+  }
+
+  private static func hasRetainedAudio(in folder: URL) -> Bool {
     ["microphone.wav", "system.wav"].contains { name in
       let attributes = try? FileManager.default.attributesOfItem(
         atPath: folder.appending(path: name).path)
@@ -331,6 +347,26 @@ actor MeetingStore {
           calendar.isDate(document.startedAt, inSameDayAs: date)
         else { return nil }
         return document
+      }
+      .sorted { $0.startedAt > $1.startedAt }
+  }
+
+  /// Includes completed meetings plus durable captures that can still be
+  /// finalized. This keeps interrupted work visible after an app restart.
+  func meetingsForDisplay(on date: Date, calendar: Calendar = .current) -> [MeetingDocument] {
+    let manager = FileManager.default
+    guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
+      return []
+    }
+    return enumerator.compactMap { $0 as? URL }
+      .filter { $0.lastPathComponent == "meeting.json" }
+      .compactMap { url -> MeetingDocument? in
+        guard let data = try? Data(contentsOf: url),
+          let document = try? decoder.decode(MeetingDocument.self, from: data),
+          calendar.isDate(document.startedAt, inSameDayAs: date)
+        else { return nil }
+        if document.status == .complete { return document }
+        return Self.hasRetainedAudio(in: url.deletingLastPathComponent()) ? document : nil
       }
       .sorted { $0.startedAt > $1.startedAt }
   }
@@ -495,7 +531,7 @@ actor MeetingStore {
     }
   }
 
-  func deleteCompletedMeeting(id: UUID) async throws {
+  func deleteMeeting(id: UUID) async throws {
     let manager = FileManager.default
     guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
       throw CocoaError(.fileNoSuchFile)
@@ -505,8 +541,7 @@ actor MeetingStore {
       .compactMap { url -> (URL, MeetingDocument)? in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
-          document.id == id,
-          document.status == .complete
+          document.id == id
         else { return nil }
         return (url.deletingLastPathComponent(), document)
       }
@@ -514,7 +549,7 @@ actor MeetingStore {
     guard let (targetFolder, document) = target else {
       throw NSError(
         domain: "MeetingStore", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "Completed meeting was not found"])
+        userInfo: [NSLocalizedDescriptionKey: "Meeting was not found"])
     }
 
     let pointerURL = root.appending(path: "current.json")
