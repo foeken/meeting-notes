@@ -1,9 +1,18 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-  <channel>
-    <title>Meeting Notes Updates</title>
-    <link>https://github.com/foeken/meeting-notes-menu</link>
-    <description>Signed application updates for Meeting Notes.</description>
-    <language>en</language>
-  </channel>
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Meeting Notes Updates</title>
+        <link>https://github.com/foeken/meeting-notes-menu</link>
+        <description>Signed application updates for Meeting Notes.</description>
+        <language>en</language>
+        <item>
+            <title>0.2.0</title>
+            <pubDate>Thu, 23 Jul 2026 13:34:11 +0200</pubDate>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/foeken/meeting-notes-menu/releases/download/v0.2.0/MeetingNotes-0.2.0.dmg" length="4951899" type="application/octet-stream" sparkle:edSignature="lp6IYsHItIZdfTVnzhfLlBMoEXO22fP/MXv0uqpVcvrdbsZ72reVSu1IormNQXElgOB3HKYXPlfi9eZ7A2y2Dg=="/>
+        </item>
+    </channel>
 </rss>
