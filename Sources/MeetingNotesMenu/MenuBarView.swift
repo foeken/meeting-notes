@@ -324,27 +324,48 @@ struct MenuBarView: View {
                 CodexIconButtonLabel(isLoading: model.codexLaunchingMeetingID == meeting.id)
               }
               .buttonStyle(.plain)
-              .disabled(model.state != .idle || model.codexLaunchingMeetingID != nil)
+              .disabled(
+                model.state != .idle || model.codexLaunchingMeetingID != nil
+                  || model.isMeetingFinalizing(meeting)
+              )
               .help("Discuss in Codex")
               Menu {
-                Button {
-                  model.requestMeetingRename(meeting)
-                } label: {
-                  Label("Rename…", systemImage: "pencil")
-                }
-                Divider()
-                Button {
-                  model.recreateMeetingNotes(meeting)
-                } label: {
-                  Label(
-                    meeting.summary == nil ? "Create summary" : "Recreate summary",
-                    systemImage: meeting.summary == nil ? "sparkles" : "arrow.clockwise")
-                }
-                Divider()
-                Button(role: .destructive) {
-                  model.requestMeetingDeletion(meeting)
-                } label: {
-                  Label("Delete meeting…", systemImage: "trash")
+                if model.isMeetingFinalizing(meeting) {
+                  Button("Finalizing…", systemImage: "waveform") {}
+                    .disabled(true)
+                } else {
+                  Button {
+                    model.requestMeetingRename(meeting)
+                  } label: {
+                    Label("Rename…", systemImage: "pencil")
+                  }
+                  Divider()
+                  if meeting.summary != nil {
+                    Button {
+                      model.openMeetingSummary(meeting)
+                    } label: {
+                      Label("Open summary", systemImage: "doc.text")
+                    }
+                  }
+                  Button {
+                    model.openMeetingTranscript(meeting)
+                  } label: {
+                    Label("Open transcript", systemImage: "text.quote")
+                  }
+                  Divider()
+                  Button {
+                    model.recreateMeetingNotes(meeting)
+                  } label: {
+                    Label(
+                      meeting.summary == nil ? "Create summary" : "Recreate summary",
+                      systemImage: meeting.summary == nil ? "sparkles" : "arrow.clockwise")
+                  }
+                  Divider()
+                  Button(role: .destructive) {
+                    model.requestMeetingDeletion(meeting)
+                  } label: {
+                    Label("Delete meeting…", systemImage: "trash")
+                  }
                 }
               } label: {
                 Image(systemName: "ellipsis")
@@ -426,11 +447,11 @@ struct MenuBarView: View {
       HStack(spacing: 8) {
         if model.recoverableMeetingAvailable {
           Button("Recover capture", systemImage: "arrow.counterclockwise", action: model.recoverLatestMeeting)
-            .disabled(model.state == .processing)
+            .disabled(model.state != .idle)
         }
         if model.enrichmentRetryAvailable {
           Button("Retry notes", systemImage: "sparkles", action: model.retryEnrichment)
-            .disabled(model.state == .processing)
+            .disabled(model.state != .idle)
         }
       }
       .buttonStyle(.bordered)

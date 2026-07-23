@@ -405,6 +405,98 @@ import Testing
   #expect(pointer.captureState == "failed")
 }
 
+@Test func stoppedMeetingFinalizationDoesNotReplaceANewActiveMeeting() async throws {
+  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: root, sync: sync)
+
+  let first = try await store.begin(title: "First", calendar: nil)
+  let stopped = try await store.prepareForFinalization()
+  let second = try await store.begin(title: "Second", calendar: nil)
+  let turn = TranscriptTurn(
+    start: 0, end: 1, speaker: "Unknown", text: "Saved separately", source: .microphone)
+  _ = try await store.finalizeStoppedMeeting(in: stopped.folder, turns: [turn], insights: nil)
+
+  #expect((await store.current())?.id == second.id)
+
+  let decoder = JSONDecoder()
+  decoder.dateDecodingStrategy = .iso8601
+  let completed = try decoder.decode(
+    MeetingDocument.self, from: Data(contentsOf: stopped.folder.appending(path: "meeting.json")))
+  #expect(completed.id == first.id)
+  #expect(completed.status == .complete)
+  #expect(completed.transcript == [turn])
+
+  let pointer = try decoder.decode(
+    CurrentMeetingPointer.self, from: Data(contentsOf: root.appending(path: "current.json")))
+  #expect(pointer.active)
+  #expect(pointer.meetingID == second.id)
+}
+
+@Test func stoppedMeetingFinalizationCompletesPointerWhenNoNewMeetingStarted() async throws {
+  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: root, sync: sync)
+
+  let meeting = try await store.begin(title: "Only meeting", calendar: nil)
+  let stopped = try await store.prepareForFinalization()
+  _ = try await store.finalizeStoppedMeeting(in: stopped.folder, turns: [], insights: nil)
+
+  let decoder = JSONDecoder()
+  decoder.dateDecodingStrategy = .iso8601
+  let pointer = try decoder.decode(
+    CurrentMeetingPointer.self, from: Data(contentsOf: root.appending(path: "current.json")))
+  #expect(!pointer.active)
+  #expect(pointer.meetingID == meeting.id)
+  #expect(pointer.captureState == "complete")
+}
+
+@Test func completedMeetingLookupDoesNotReplaceTheActiveMeeting() async throws {
+  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: root, sync: sync)
+
+  let completed = try await store.begin(title: "Completed", calendar: nil)
+  try await store.replaceTranscript([], status: .complete)
+  let active = try await store.begin(title: "Active", calendar: nil)
+
+  let found = try await store.completedMeeting(id: completed.id)
+  #expect(found.document.id == completed.id)
+  #expect((await store.current())?.id == active.id)
+
+  let decoder = JSONDecoder()
+  decoder.dateDecodingStrategy = .iso8601
+  let pointer = try decoder.decode(
+    CurrentMeetingPointer.self, from: Data(contentsOf: root.appending(path: "current.json")))
+  #expect(pointer.active)
+  #expect(pointer.meetingID == active.id)
+}
+
+@Test func meetingListRefreshKeepsOtherPendingFinalizationsVisible() {
+  let calendar = Calendar(identifier: .gregorian)
+  let day = Date(timeIntervalSince1970: 1_768_435_200)
+  let completedID = UUID()
+  let pendingID = UUID()
+  let completed = TodayMeetingSummary(
+    id: completedID, title: "Completed", startedAt: day.addingTimeInterval(3_600),
+    endedAt: day.addingTimeInterval(4_200), summary: "Done")
+  let duplicatePending = TodayMeetingSummary(
+    id: completedID, title: "Old pending row", startedAt: completed.startedAt,
+    endedAt: completed.endedAt, summary: nil)
+  let stillPending = TodayMeetingSummary(
+    id: pendingID, title: "Still finalizing", startedAt: day.addingTimeInterval(7_200),
+    endedAt: day.addingTimeInterval(7_800), summary: nil)
+
+  let merged = AppModel.mergeMeetingSummaries(
+    completed: [completed], pending: [duplicatePending, stillPending], on: day,
+    calendar: calendar)
+
+  #expect(merged.map(\.id) == [pendingID, completedID])
+}
+
 @Test func persistedMeetingCreatesDurableSyncMarkers() async throws {
   let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
@@ -432,6 +524,37 @@ import Testing
   try WavFile.finalize(WavFile.create(at: system), bytes: 0)
   try await store.setStatus(.failed)
   #expect(await store.latestRecoverableFolder() == nil)
+}
+
+@Test func activelyManagedMeetingsAreExcludedFromRecovery() async throws {
+  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: root, sync: sync)
+
+  // A meeting that stopped and is still finalizing: status .processing with
+  // real audio on disk. It must not be offered for recovery while managed.
+  let finalizing = try await store.begin(title: "Finalizing", calendar: nil)
+  let finalizingMic = try #require(await store.audioURL(named: "microphone.wav"))
+  let finalizingHandle = try WavFile.create(at: finalizingMic)
+  let finalizingAudio = Data(repeating: 1, count: 3_200)
+  try finalizingHandle.write(contentsOf: finalizingAudio)
+  try WavFile.finalize(finalizingHandle, bytes: finalizingAudio.count)
+  _ = try await store.prepareForFinalization()
+
+  // A newly started meeting that is actively recording, also with audio.
+  let recording = try await store.begin(title: "Recording", calendar: nil)
+  let recordingMic = try #require(await store.audioURL(named: "microphone.wav"))
+  let recordingHandle = try WavFile.create(at: recordingMic)
+  let recordingAudio = Data(repeating: 1, count: 3_200)
+  try recordingHandle.write(contentsOf: recordingAudio)
+  try WavFile.finalize(recordingHandle, bytes: recordingAudio.count)
+
+  // Without exclusions both look recoverable.
+  #expect(await store.latestRecoverableFolder() != nil)
+  // Excluding the two managed meetings leaves nothing to recover.
+  #expect(
+    await store.latestRecoverableFolder(excluding: [finalizing.id, recording.id]) == nil)
 }
 
 @Test func completedMeetingsReturnsOnlyTodayNewestFirst() async throws {
