@@ -6,13 +6,26 @@
         <description>Signed application updates for Meeting Notes.</description>
         <language>en</language>
         <item>
-            <title>0.2.0</title>
-            <pubDate>Thu, 23 Jul 2026 13:34:11 +0200</pubDate>
-            <sparkle:version>2</sparkle:version>
-            <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
+            <title>0.3.0</title>
+            <pubDate>Thu, 23 Jul 2026 22:35:27 +0200</pubDate>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/foeken/meeting-notes-menu/releases/download/v0.2.0/MeetingNotes-0.2.0.dmg" length="4951899" type="application/octet-stream" sparkle:edSignature="lp6IYsHItIZdfTVnzhfLlBMoEXO22fP/MXv0uqpVcvrdbsZ72reVSu1IormNQXElgOB3HKYXPlfi9eZ7A2y2Dg=="/>
+            <description sparkle:format="markdown"><![CDATA[## What’s new
+
+- Start a new recording immediately while the previous meeting finalizes safely in the background.
+- Interrupted captures remain visible after relaunch and can be retried or deleted per meeting.
+- Stopping no longer waits for a slow live-preview transcription prediction.
+- Meeting menus now include separate actions to open the summary and transcript.
+- Selected Tana Supertags are shown first, with both selected and unselected groups kept alphabetical.
+
+## Reliability
+
+- Finalizing an earlier meeting no longer replaces or disrupts a newer active recording.
+- Recovery targets the meeting you selected and no longer treats silent audio as recoverable speech.
+]]></description>
+            <enclosure url="https://github.com/foeken/meeting-notes-menu/releases/download/v0.3.0/MeetingNotes-0.3.0.dmg" length="5008976" type="application/octet-stream" sparkle:edSignature="JwMXHDLNQGrmPWyu4C8koeo88RfWYlr7sEyL0s1/m6iZppuOUAg2ZRl6udyQT+YsVCxHJrMMXn4kLtKOt3Y5Dg=="/>
         </item>
     </channel>
 </rss>
