@@ -41,6 +41,18 @@ struct TanaSupertagChoice: Identifiable, Equatable, Sendable {
       return comparison == .orderedSame ? $0.id < $1.id : comparison == .orderedAscending
     }
   }
+
+  static func selectedFirst(
+    _ choices: [TanaSupertagChoice], selectedTagIDs: Set<String>
+  ) -> [TanaSupertagChoice] {
+    choices.sorted { lhs, rhs in
+      let lhsSelected = !selectedTagIDs.isDisjoint(with: lhs.tagIDs)
+      let rhsSelected = !selectedTagIDs.isDisjoint(with: rhs.tagIDs)
+      if lhsSelected != rhsSelected { return lhsSelected }
+      let comparison = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+      return comparison == .orderedSame ? lhs.id < rhs.id : comparison == .orderedAscending
+    }
+  }
 }
 
 struct TanaSettings: Codable, Equatable, Sendable {

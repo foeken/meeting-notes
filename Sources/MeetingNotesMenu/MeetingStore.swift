@@ -1,6 +1,11 @@
 import Foundation
 
 actor MeetingStore {
+  struct StoppedMeeting: Sendable {
+    let document: MeetingDocument
+    let folder: URL
+  }
+
   private let root: URL
   private let sync: RemoteSyncService
   private let encoder = JSONEncoder()
@@ -42,7 +47,8 @@ actor MeetingStore {
     return document
   }
 
-  func loadCompletedMeeting(id: UUID) throws -> (document: MeetingDocument, folder: URL) {
+  /// Finds a completed meeting without changing the active capture held by the store.
+  func completedMeeting(id: UUID) throws -> (document: MeetingDocument, folder: URL) {
     guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
     else { throw CocoaError(.fileNoSuchFile) }
     let target = enumerator.compactMap { $0 as? URL }
@@ -61,8 +67,6 @@ actor MeetingStore {
         domain: "MeetingStore", code: 8,
         userInfo: [NSLocalizedDescriptionKey: "Completed meeting was not found"])
     }
-    meeting = document
-    folder = targetFolder
     return (document, targetFolder)
   }
 
@@ -75,6 +79,59 @@ actor MeetingStore {
     meeting?.transcript = turns
     meeting?.status = .processing
     try persist()
+  }
+
+  /// Marks the active capture as safely saved, then returns everything needed
+  /// to finish it without touching a subsequently started meeting.
+  func prepareForFinalization() throws -> StoppedMeeting {
+    guard var document = meeting, let folder else {
+      throw NSError(
+        domain: "MeetingStore", code: 10,
+        userInfo: [NSLocalizedDescriptionKey: "No recording is available to finalize"])
+    }
+    document.status = .processing
+    meeting = document
+    try persist()
+    try persistPointer(active: false, captureState: MeetingDocument.Status.processing.rawValue)
+    return StoppedMeeting(document: document, folder: folder)
+  }
+
+  /// Completes a previously stopped capture by addressing its folder directly.
+  /// This deliberately leaves the current-meeting pointer alone: a new capture
+  /// may already be in progress.
+  func finalizeStoppedMeeting(
+    in targetFolder: URL,
+    turns: [TranscriptTurn],
+    insights: MeetingInsights?
+  ) throws -> MeetingDocument {
+    var document = try decoder.decode(
+      MeetingDocument.self,
+      from: Data(contentsOf: targetFolder.appending(path: "meeting.json")))
+    document.transcript = turns
+    document.insights = insights
+    document.status = .complete
+    document.endedAt = Date()
+    try persist(document, in: targetFolder)
+    if meeting?.id == document.id {
+      meeting = document
+      folder = targetFolder
+      try? persistPointer(active: false, captureState: MeetingDocument.Status.complete.rawValue)
+    }
+    return document
+  }
+
+  func markStoppedMeetingFailed(in targetFolder: URL) throws {
+    var document = try decoder.decode(
+      MeetingDocument.self,
+      from: Data(contentsOf: targetFolder.appending(path: "meeting.json")))
+    document.status = .failed
+    document.endedAt = Date()
+    try persist(document, in: targetFolder)
+    if meeting?.id == document.id {
+      meeting = document
+      folder = targetFolder
+      try? persistPointer(active: false, captureState: MeetingDocument.Status.failed.rawValue)
+    }
   }
 
   func replaceCompletedTranscript(_ turns: [TranscriptTurn]) async throws {
@@ -122,6 +179,27 @@ actor MeetingStore {
     try persist()
   }
 
+  func setCompletedMeetingInsights(
+    _ insights: MeetingInsights,
+    meetingID: UUID,
+    in targetFolder: URL
+  ) throws {
+    var document = try decoder.decode(
+      MeetingDocument.self,
+      from: Data(contentsOf: targetFolder.appending(path: "meeting.json")))
+    guard document.id == meetingID, document.status == .complete else {
+      throw NSError(
+        domain: "MeetingStore", code: 11,
+        userInfo: [NSLocalizedDescriptionKey: "Completed meeting was not found"])
+    }
+    document.insights = insights
+    try persist(document, in: targetFolder)
+    if meeting?.id == document.id {
+      meeting = document
+      folder = targetFolder
+    }
+  }
+
   func setCodexThreadID(_ threadID: String, for meetingID: UUID) async throws {
     if meeting?.id == meetingID {
       meeting?.codexThreadID = threadID
@@ -165,25 +243,40 @@ actor MeetingStore {
 
   func removeAudioFiles() throws {
     guard let folder else { return }
+    try removeAudioFiles(in: folder)
+  }
+
+  func removeAudioFiles(in targetFolder: URL) throws {
     for name in ["microphone.wav", "system.wav"] {
-      let url = folder.appending(path: name)
+      let url = targetFolder.appending(path: name)
       if FileManager.default.fileExists(atPath: url.path) {
         try FileManager.default.removeItem(at: url)
       }
     }
   }
 
-  func latestRecoverableFolder() -> URL? {
+  func latestRecoverableFolder(excluding excludedIDs: Set<UUID> = []) -> URL? {
+    recoverableFolders(excluding: excludedIDs).first?.folder
+  }
+
+  func recoverableFolder(id: UUID, excluding excludedIDs: Set<UUID> = []) -> URL? {
+    recoverableFolders(excluding: excludedIDs).first { $0.document.id == id }?.folder
+  }
+
+  private func recoverableFolders(
+    excluding excludedIDs: Set<UUID> = []
+  ) -> [(folder: URL, document: MeetingDocument, modifiedAt: Date)] {
     let manager = FileManager.default
     guard
       let enumerator = manager.enumerator(
         at: root, includingPropertiesForKeys: [.contentModificationDateKey])
-    else { return nil }
+    else { return [] }
     return enumerator.compactMap { $0 as? URL }
       .filter { $0.lastPathComponent == "meeting.json" }
-      .compactMap { url -> (URL, Date)? in
+      .compactMap { url -> (URL, MeetingDocument, Date)? in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
+          !excludedIDs.contains(document.id),
           document.status == .recording || document.status == .processing
             || document.status == .failed,
           Self.hasRecoverableAudio(in: url.deletingLastPathComponent())
@@ -191,12 +284,18 @@ actor MeetingStore {
         let date =
           (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
           ?? .distantPast
-        return (url.deletingLastPathComponent(), date)
+        return (url.deletingLastPathComponent(), document, date)
       }
-      .max(by: { $0.1 < $1.1 })?.0
+      .sorted { $0.2 > $1.2 }
   }
 
   private static func hasRecoverableAudio(in folder: URL) -> Bool {
+    ["microphone.wav", "system.wav"].contains { name in
+      WavFile.hasMeaningfulSignal(at: folder.appending(path: name))
+    }
+  }
+
+  private static func hasRetainedAudio(in folder: URL) -> Bool {
     ["microphone.wav", "system.wav"].contains { name in
       let attributes = try? FileManager.default.attributesOfItem(
         atPath: folder.appending(path: name).path)
@@ -252,8 +351,28 @@ actor MeetingStore {
       .sorted { $0.startedAt > $1.startedAt }
   }
 
+  /// Includes completed meetings plus durable captures that can still be
+  /// finalized. This keeps interrupted work visible after an app restart.
+  func meetingsForDisplay(on date: Date, calendar: Calendar = .current) -> [MeetingDocument] {
+    let manager = FileManager.default
+    guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
+      return []
+    }
+    return enumerator.compactMap { $0 as? URL }
+      .filter { $0.lastPathComponent == "meeting.json" }
+      .compactMap { url -> MeetingDocument? in
+        guard let data = try? Data(contentsOf: url),
+          let document = try? decoder.decode(MeetingDocument.self, from: data),
+          calendar.isDate(document.startedAt, inSameDayAs: date)
+        else { return nil }
+        if document.status == .complete { return document }
+        return Self.hasRetainedAudio(in: url.deletingLastPathComponent()) ? document : nil
+      }
+      .sorted { $0.startedAt > $1.startedAt }
+  }
+
   func recreateCompletedMeetingNotes(id: UUID) async throws {
-    let (document, targetFolder) = try loadCompletedMeeting(id: id)
+    let (document, targetFolder) = try completedMeeting(id: id)
 
     try atomicWrite(
       Data(MarkdownRenderer.renderMeeting(document).utf8),
@@ -412,7 +531,7 @@ actor MeetingStore {
     }
   }
 
-  func deleteCompletedMeeting(id: UUID) async throws {
+  func deleteMeeting(id: UUID) async throws {
     let manager = FileManager.default
     guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
       throw CocoaError(.fileNoSuchFile)
@@ -422,8 +541,7 @@ actor MeetingStore {
       .compactMap { url -> (URL, MeetingDocument)? in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
-          document.id == id,
-          document.status == .complete
+          document.id == id
         else { return nil }
         return (url.deletingLastPathComponent(), document)
       }
@@ -431,7 +549,7 @@ actor MeetingStore {
     guard let (targetFolder, document) = target else {
       throw NSError(
         domain: "MeetingStore", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "Completed meeting was not found"])
+        userInfo: [NSLocalizedDescriptionKey: "Meeting was not found"])
     }
 
     let pointerURL = root.appending(path: "current.json")
@@ -559,6 +677,10 @@ actor MeetingStore {
 
   private func persist() throws {
     guard let meeting, let folder else { return }
+    try persist(meeting, in: folder)
+  }
+
+  private func persist(_ meeting: MeetingDocument, in folder: URL) throws {
     let liveURL = folder.appending(path: "live.md")
     let transcriptURL = folder.appending(path: "transcript.md")
     let meetingURL = folder.appending(path: "meeting.md")

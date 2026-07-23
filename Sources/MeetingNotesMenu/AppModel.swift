@@ -68,7 +68,9 @@ final class AppModel {
   var codexPromptStatusText = ""
 
   var tanaSupertagChoices: [TanaSupertagChoice] {
-    TanaSupertagChoice.grouped(tanaSupertags)
+    TanaSupertagChoice.selectedFirst(
+      TanaSupertagChoice.grouped(tanaSupertags),
+      selectedTagIDs: tanaSelectedSupertagIDs)
   }
 
   private let calendar = CalendarService()
@@ -100,6 +102,10 @@ final class AppModel {
   private var hookSettingsSaveTask: Task<Void, Never>?
   private var latestDetectedMeetingApp: String?
   private var recordingMeetingApp: String?
+  private var stoppedMeetingFinalizationTasks: [UUID: Task<Void, Never>] = [:]
+  private var stoppedMeetingGracePeriods: Set<UUID> = []
+  private var pendingMeetingSummaries: [UUID: TodayMeetingSummary] = [:]
+  private var activeRecordingMeetingID: UUID?
 
   init() {
     let archiveConfiguration = ArchiveSettingsStore.load()
@@ -123,11 +129,6 @@ final class AppModel {
     tanaWorkspaceID = tanaSettings.workspaceID ?? ""
     tanaWorkspaceName = tanaSettings.workspaceName ?? ""
     tanaSelectedSupertagIDs = tanaSettings.selectedSupertagIDs
-    microphone.onSamples = { [live] samples in
-      Task { await live.append(samples, source: .microphone) }
-    }
-    systemAudio.onSamples = { [live] samples in Task { await live.append(samples, source: .system) }
-    }
     Task { [transcriber] in try? await transcriber.prepare() }
     let notifications = NSWorkspace.shared.notificationCenter
     workspaceObservers.append(
@@ -251,7 +252,7 @@ final class AppModel {
     await remoteSync.reconcile(root: root)
     await runTranscriptRetentionCleanup(reportStatus: false)
     startRetentionMaintenance()
-    recoverableMeetingAvailable = await store.latestRecoverableFolder() != nil
+    await refreshRecoverableMeetingAvailability()
     await refreshMeetingDay()
     await loadCalendarSuggestion()
     await refreshChatGPTAuthentication()
@@ -503,18 +504,74 @@ final class AppModel {
 
   func refreshMeetingDay() async {
     let requestedDate = selectedMeetingDate
-    let meetings = await store.completedMeetings(on: requestedDate).map {
+    let completed = await store.meetingsForDisplay(on: requestedDate).map {
       TodayMeetingSummary(
         id: $0.id,
         title: $0.title,
         startedAt: $0.startedAt,
         endedAt: $0.endedAt,
-        summary: $0.insights?.summary
+        summary: $0.insights?.summary,
+        status: $0.status
       )
     }
     guard Calendar.autoupdatingCurrent.isDate(requestedDate, inSameDayAs: selectedMeetingDate)
     else { return }
-    displayedMeetings = meetings
+    displayedMeetings = Self.mergeMeetingSummaries(
+      completed: completed,
+      pending: Array(pendingMeetingSummaries.values),
+      on: requestedDate,
+      calendar: .autoupdatingCurrent
+    )
+  }
+
+  nonisolated static func mergeMeetingSummaries(
+    completed: [TodayMeetingSummary],
+    pending: [TodayMeetingSummary],
+    on date: Date,
+    calendar: Calendar = .autoupdatingCurrent
+  ) -> [TodayMeetingSummary] {
+    let completedIDs = Set(completed.map(\.id))
+    let visiblePending = pending.filter {
+      !completedIDs.contains($0.id) && calendar.isDate($0.startedAt, inSameDayAs: date)
+    }
+    return (completed + visiblePending).sorted { $0.startedAt > $1.startedAt }
+  }
+
+  /// Shows the just-stopped meeting in today's list immediately, before
+  /// transcription and enrichment finish, so stopping feels complete right away.
+  private func showPendingMeetingInList(_ document: MeetingDocument) {
+    let pending = TodayMeetingSummary(
+      id: document.id,
+      title: document.title,
+      startedAt: document.startedAt,
+      endedAt: document.endedAt ?? Date(),
+      summary: nil,
+      status: .processing
+    )
+    pendingMeetingSummaries[pending.id] = pending
+    selectedMeetingDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+    guard !displayedMeetings.contains(where: { $0.id == pending.id }) else { return }
+    displayedMeetings.insert(pending, at: 0)
+  }
+
+  func isMeetingFinalizing(_ meeting: TodayMeetingSummary) -> Bool {
+    pendingMeetingSummaries[meeting.id] != nil
+  }
+
+  func isMeetingRecoverable(_ meeting: TodayMeetingSummary) -> Bool {
+    meeting.status != .complete && !isMeetingFinalizing(meeting)
+  }
+
+  /// Meetings the app is actively capturing or finalizing in the background.
+  /// These are intentionally excluded from recovery detection so a live or
+  /// still-finalizing meeting never surfaces a "Recover capture" prompt.
+  private var activelyManagedMeetingIDs: Set<UUID> {
+    Set(pendingMeetingSummaries.keys).union(activeRecordingMeetingID.map { [$0] } ?? [])
+  }
+
+  private func refreshRecoverableMeetingAvailability() async {
+    recoverableMeetingAvailable =
+      await store.latestRecoverableFolder(excluding: activelyManagedMeetingIDs) != nil
   }
 
   var archiveSubtitle: String {
@@ -524,6 +581,8 @@ final class AppModel {
   var canSaveArchiveSettings: Bool {
     archiveSettingsValidationError == nil && (state == .idle || isFailed)
   }
+
+  var canManageMeetings: Bool { state == .idle || isFailed }
 
   var canTestPostMeetingHook: Bool {
     canSaveArchiveSettings
@@ -667,7 +726,7 @@ final class AppModel {
     Task {
       defer { codexLaunchingMeetingID = nil }
       do {
-        let (document, folder) = try await store.loadCompletedMeeting(id: meeting.id)
+        let (document, folder) = try await store.completedMeeting(id: meeting.id)
         await openMeetingInCodex(document: document, folder: folder)
       } catch {
         statusText = "Could not open the meeting in Codex: \(error.localizedDescription)"
@@ -969,7 +1028,7 @@ final class AppModel {
   }
 
   func requestMeetingDeletion(_ meeting: TodayMeetingSummary) {
-    guard state == .idle else { return }
+    guard canManageMeetings else { return }
     meetingPendingRename = nil
     meetingPendingDeletion = meeting
   }
@@ -979,7 +1038,7 @@ final class AppModel {
   }
 
   func confirmMeetingDeletion() {
-    guard state == .idle, let meeting = meetingPendingDeletion else { return }
+    guard canManageMeetings, let meeting = meetingPendingDeletion else { return }
     meetingPendingDeletion = nil
     Task { await deleteMeeting(meeting) }
   }
@@ -988,7 +1047,7 @@ final class AppModel {
     state = .processing
     statusText = "Deleting \(meeting.title)…"
     do {
-      try await store.deleteCompletedMeeting(id: meeting.id)
+      try await store.deleteMeeting(id: meeting.id)
       await refreshMeetingDay()
       state = .idle
       showTransientStatus("Deleted from Laptop and \(archiveDisplayName)")
@@ -1003,6 +1062,30 @@ final class AppModel {
     meetingPendingDeletion = nil
     meetingPendingRename = meeting
     meetingRenameDraft = meeting.title
+  }
+
+  func openMeetingSummary(_ meeting: TodayMeetingSummary) {
+    openMeetingFile(meeting, named: "meeting.md")
+  }
+
+  func openMeetingTranscript(_ meeting: TodayMeetingSummary) {
+    openMeetingFile(meeting, named: "transcript.md")
+  }
+
+  private func openMeetingFile(_ meeting: TodayMeetingSummary, named fileName: String) {
+    Task {
+      do {
+        let (_, folder) = try await store.completedMeeting(id: meeting.id)
+        let file = folder.appending(path: fileName)
+        guard FileManager.default.fileExists(atPath: file.path) else {
+          statusText = "\(fileName) does not exist for this meeting."
+          return
+        }
+        NSWorkspace.shared.open(file)
+      } catch {
+        statusText = "Could not open \(fileName): \(error.localizedDescription)"
+      }
+    }
   }
 
   func cancelMeetingRename() {
@@ -1055,7 +1138,7 @@ final class AppModel {
     state = .processing
     statusText = "Recreating summary…"
     do {
-      let (document, folder) = try await store.loadCompletedMeeting(id: meeting.id)
+      let (document, folder) = try await store.completedMeeting(id: meeting.id)
       guard document.transcriptDeletedAt == nil, !document.transcript.isEmpty else {
         throw NSError(
           domain: "MeetingNotesMenu", code: 13,
@@ -1066,7 +1149,8 @@ final class AppModel {
       }
       let insights = try await enricher.enrich(
         document, checkpointURL: folder.appending(path: "enrichment-checkpoint.json"))
-      try await store.setInsights(insights)
+      try await store.setCompletedMeetingInsights(
+        insights, meetingID: document.id, in: folder)
       await remoteSync.flush()
       await refreshMeetingDay()
       state = .idle
@@ -1119,6 +1203,9 @@ final class AppModel {
   }
 
   private func start() async {
+    // A second meeting should never make the first recording wait out its
+    // courtesy delay. Its audio is already safely stored, so finish it now.
+    stoppedMeetingGracePeriods.removeAll()
     state = .starting
     statusText = "Requesting access…"
     do {
@@ -1128,13 +1215,14 @@ final class AppModel {
           userInfo: [NSLocalizedDescriptionKey: "Microphone access was denied"])
       }
       let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-      _ = try await store.begin(
+      let startedDocument = try await store.begin(
         title: cleanTitle.isEmpty ? "Meeting" : cleanTitle, calendar: calendarMetadata)
+      activeRecordingMeetingID = startedDocument.id
       guard let microphoneURL = await store.audioURL(named: "microphone.wav"),
         let systemURL = await store.audioURL(named: "system.wav")
       else { throw CocoaError(.fileNoSuchFile) }
 
-      await live.start { [weak self, store] turn in
+      let liveSessionID = await live.start { [weak self, store] turn in
         try? await store.append(turn)
         await MainActor.run {
           self?.recentTurns.append(turn)
@@ -1142,6 +1230,12 @@ final class AppModel {
             self?.recentTurns.removeFirst(count - 4)
           }
         }
+      }
+      microphone.onSamples = { [live] samples in
+        Task { await live.append(samples, source: .microphone, sessionID: liveSessionID) }
+      }
+      systemAudio.onSamples = { [live] samples in
+        Task { await live.append(samples, source: .system, sessionID: liveSessionID) }
       }
       captureClock.start()
       microphone.usePreferredDevice(MicrophoneSettingsStore.preferredDeviceUID())
@@ -1162,11 +1256,14 @@ final class AppModel {
     } catch {
       _ = try? microphone.stop()
       _ = try? await systemAudio.stop()
+      microphone.onSamples = nil
+      systemAudio.onSamples = nil
       await live.finish()
       captureClock.reset()
       recordingWakeLock.release()
       meetingAutoStopScheduler.cancel()
       recordingMeetingApp = nil
+      activeRecordingMeetingID = nil
       state = .failed(error.localizedDescription)
       statusText = error.localizedDescription
       try? await store.setStatus(.failed)
@@ -1252,7 +1349,7 @@ final class AppModel {
     recordingMeetingApp = nil
     recordingWakeLock.release()
     state = .processing
-    statusText = "Finishing transcript…"
+    statusText = "Saving recording…"
     timer?.invalidate()
     timer = nil
     pausedBySleep = false
@@ -1260,45 +1357,126 @@ final class AppModel {
       guard let microphoneURL = try microphone.stop(),
         let systemURL = try await systemAudio.stop()
       else { throw CocoaError(.fileNoSuchFile) }
+      microphone.onSamples = nil
+      systemAudio.onSamples = nil
       await live.finish()
-      try await store.setStatus(.processing)
-      let turns = try await final.process(microphone: microphoneURL, system: systemURL)
-      try await store.setFinalTranscript(turns)
-      let meeting = await store.current()
-      var enrichmentWarning: String?
-      var insights: MeetingInsights?
-      if let meeting {
-        let checkpoint = (await store.currentFolder())?.appending(
-          path: "enrichment-checkpoint.json")
-        do { insights = try await enricher.enrich(meeting, checkpointURL: checkpoint) } catch {
-          enrichmentWarning = error.localizedDescription
-        }
-      }
-      try await store.finalize(insights: insights)
-      if !keepAudioAfterProcessing { try await store.removeAudioFiles() }
-      await remoteSync.flush()
-      recentTurns = Array(turns.suffix(4))
-      if let syncError = await remoteSync.lastError {
-        statusText = "Saved locally; remote sync pending: \(syncError)"
-      } else if let enrichmentWarning {
-        statusText = "Transcript saved; \(enrichmentWarning)"
-      } else {
-        showTransientStatus(remoteSyncEnabled
-          ? "Saved locally and synced to \(archiveDisplayName)"
-          : "Saved to the local archive")
-      }
+      let stoppedMeeting = try await store.prepareForFinalization()
+      activeRecordingMeetingID = nil
+      showPendingMeetingInList(stoppedMeeting.document)
+      queueStoppedMeetingFinalization(
+        stoppedMeeting,
+        microphoneURL: microphoneURL,
+        systemURL: systemURL
+      )
+
+      // The audio files and an explicit processing state are now durable. Let
+      // the next meeting begin while this one is transcribed in the background.
       state = .idle
       captureClock.reset()
       startedAt = nil
-      enrichmentRetryAvailable = insights == nil
-      selectedMeetingDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
-      await refreshMeetingDay()
+      elapsed = 0
+      recentTurns = []
       title = ""
+      calendarMetadata = nil
       await loadCalendarSuggestion()
     } catch {
       try? await store.setStatus(.failed)
       state = .failed(error.localizedDescription)
       statusText = error.localizedDescription
+    }
+  }
+
+  private func queueStoppedMeetingFinalization(
+    _ stoppedMeeting: MeetingStore.StoppedMeeting,
+    microphoneURL: URL,
+    systemURL: URL
+  ) {
+    let meetingID = stoppedMeeting.document.id
+    stoppedMeetingGracePeriods.insert(meetingID)
+    statusText = "Recording saved · finalizing in 30s"
+    stoppedMeetingFinalizationTasks[meetingID] = Task { [weak self] in
+      await self?.finalizeStoppedMeeting(
+        stoppedMeeting,
+        microphoneURL: microphoneURL,
+        systemURL: systemURL
+      )
+    }
+  }
+
+  private func finalizeStoppedMeeting(
+    _ stoppedMeeting: MeetingStore.StoppedMeeting,
+    microphoneURL: URL,
+    systemURL: URL
+  ) async {
+    let meetingID = stoppedMeeting.document.id
+    defer {
+      stoppedMeetingGracePeriods.remove(meetingID)
+      stoppedMeetingFinalizationTasks[meetingID] = nil
+    }
+
+    for remaining in stride(from: 30, through: 1, by: -1) {
+      guard stoppedMeetingGracePeriods.contains(meetingID) else { break }
+      if state == .idle { statusText = "Recording saved · finalizing in \(remaining)s" }
+      try? await Task.sleep(for: .seconds(1))
+    }
+
+    if state == .idle { statusText = "Finishing transcript…" }
+    var enrichmentWarning: String?
+    var insights: MeetingInsights?
+    do {
+      let turns = try await final.process(microphone: microphoneURL, system: systemURL)
+      var document = stoppedMeeting.document
+      document.transcript = turns
+      document.status = .processing
+      do {
+        insights = try await enricher.enrich(
+          document,
+          checkpointURL: stoppedMeeting.folder.appending(path: "enrichment-checkpoint.json")
+        )
+      } catch {
+        enrichmentWarning = error.localizedDescription
+      }
+      _ = try await store.finalizeStoppedMeeting(
+        in: stoppedMeeting.folder,
+        turns: turns,
+        insights: insights
+      )
+    } catch {
+      try? await store.markStoppedMeetingFailed(in: stoppedMeeting.folder)
+      pendingMeetingSummaries[meetingID] = nil
+      await refreshRecoverableMeetingAvailability()
+      await refreshMeetingDay()
+      guard state == .idle else { return }
+      statusText = "Finalization retained: \(error.localizedDescription)"
+      return
+    }
+
+    // Once meeting.json and the Markdown artifacts are complete, housekeeping
+    // failures must not downgrade the meeting back to failed.
+    var cleanupWarning: String?
+    if !keepAudioAfterProcessing {
+      do {
+        try await store.removeAudioFiles(in: stoppedMeeting.folder)
+      } catch {
+        cleanupWarning = error.localizedDescription
+      }
+    }
+    await remoteSync.flush()
+    pendingMeetingSummaries[meetingID] = nil
+    await refreshRecoverableMeetingAvailability()
+    enrichmentRetryAvailable = await store.latestNeedsEnrichmentFolder() != nil
+    await refreshMeetingDay()
+    guard state == .idle else { return }
+    if let cleanupWarning {
+      statusText = "Meeting saved; audio cleanup pending: \(cleanupWarning)"
+    } else if let syncError = await remoteSync.lastError {
+      statusText = "Saved locally; remote sync pending: \(syncError)"
+    } else if let enrichmentWarning {
+      statusText = "Transcript saved; \(enrichmentWarning)"
+    } else {
+      showTransientStatus(remoteSyncEnabled
+        ? "Saved locally and synced to \(archiveDisplayName)"
+        : "Saved to the local archive")
     }
   }
 
@@ -1317,18 +1495,32 @@ final class AppModel {
   }
 
   func recoverLatestMeeting() {
-    Task { await recover() }
+    Task { await recover(meetingID: nil) }
   }
 
-  private func recover() async {
-    guard let folder = await store.latestRecoverableFolder() else {
+  func recoverMeeting(_ meeting: TodayMeetingSummary) {
+    Task { await recover(meetingID: meeting.id) }
+  }
+
+  private func recover(meetingID: UUID?) async {
+    let folder = if let meetingID {
+      await store.recoverableFolder(id: meetingID, excluding: activelyManagedMeetingIDs)
+    } else {
+      await store.latestRecoverableFolder(excluding: activelyManagedMeetingIDs)
+    }
+    guard let folder else {
       recoverableMeetingAvailable = false
+      if meetingID != nil {
+        state = .idle
+        statusText = "No usable speech was captured for this meeting"
+      }
       return
     }
     state = .processing
     statusText = "Recovering transcript…"
+    var finalized = false
     do {
-      _ = try await store.load(folder: folder)
+      let recoveredDocument = try await store.load(folder: folder)
       let microphoneURL = folder.appending(path: "microphone.wav")
       let systemURL = folder.appending(path: "system.wav")
       for url in [microphoneURL, systemURL]
@@ -1347,15 +1539,24 @@ final class AppModel {
         }
       }
       try await store.finalize(insights: insights)
-      if !keepAudioAfterProcessing { try await store.removeAudioFiles() }
+      finalized = true
+      var cleanupWarning: String?
+      if !keepAudioAfterProcessing {
+        do { try await store.removeAudioFiles() } catch {
+          cleanupWarning = error.localizedDescription
+        }
+      }
       await remoteSync.flush()
       recentTurns = Array(turns.suffix(4))
-      recoverableMeetingAvailable = false
-      enrichmentRetryAvailable = insights == nil
+      pendingMeetingSummaries[recoveredDocument.id] = nil
+      await refreshRecoverableMeetingAvailability()
+      enrichmentRetryAvailable = await store.latestNeedsEnrichmentFolder() != nil
       state = .idle
       selectedMeetingDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
       await refreshMeetingDay()
-      if let enrichmentWarning {
+      if let cleanupWarning {
+        statusText = "Meeting recovered; audio cleanup pending: \(cleanupWarning)"
+      } else if let enrichmentWarning {
         statusText = "Transcript recovered; \(enrichmentWarning)"
       } else {
         showTransientStatus(remoteSyncEnabled
@@ -1363,7 +1564,8 @@ final class AppModel {
           : "Recovered and saved locally")
       }
     } catch {
-      try? await store.setStatus(.failed)
+      if !finalized { try? await store.setStatus(.failed) }
+      await refreshRecoverableMeetingAvailability()
       state = .failed(error.localizedDescription)
       statusText = "Recovery retained: \(error.localizedDescription)"
     }

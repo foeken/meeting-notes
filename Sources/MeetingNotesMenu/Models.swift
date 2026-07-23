@@ -71,6 +71,19 @@ struct TodayMeetingSummary: Identifiable, Equatable, Sendable {
   let startedAt: Date
   let endedAt: Date?
   let summary: String?
+  let status: MeetingDocument.Status
+
+  init(
+    id: UUID, title: String, startedAt: Date, endedAt: Date?, summary: String?,
+    status: MeetingDocument.Status = .complete
+  ) {
+    self.id = id
+    self.title = title
+    self.startedAt = startedAt
+    self.endedAt = endedAt
+    self.summary = summary
+    self.status = status
+  }
 }
 
 struct MeetingDocument: Codable, Sendable {

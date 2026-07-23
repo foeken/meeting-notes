@@ -324,27 +324,60 @@ struct MenuBarView: View {
                 CodexIconButtonLabel(isLoading: model.codexLaunchingMeetingID == meeting.id)
               }
               .buttonStyle(.plain)
-              .disabled(model.state != .idle || model.codexLaunchingMeetingID != nil)
+              .disabled(
+                !model.canManageMeetings || model.codexLaunchingMeetingID != nil
+                  || model.isMeetingFinalizing(meeting) || model.isMeetingRecoverable(meeting)
+              )
               .help("Discuss in Codex")
               Menu {
-                Button {
-                  model.requestMeetingRename(meeting)
-                } label: {
-                  Label("Rename…", systemImage: "pencil")
-                }
-                Divider()
-                Button {
-                  model.recreateMeetingNotes(meeting)
-                } label: {
-                  Label(
-                    meeting.summary == nil ? "Create summary" : "Recreate summary",
-                    systemImage: meeting.summary == nil ? "sparkles" : "arrow.clockwise")
-                }
-                Divider()
-                Button(role: .destructive) {
-                  model.requestMeetingDeletion(meeting)
-                } label: {
-                  Label("Delete meeting…", systemImage: "trash")
+                if model.isMeetingFinalizing(meeting) {
+                  Button("Finalizing…", systemImage: "waveform") {}
+                    .disabled(true)
+                } else if model.isMeetingRecoverable(meeting) {
+                  Button {
+                    model.recoverMeeting(meeting)
+                  } label: {
+                    Label("Retry finalization", systemImage: "arrow.counterclockwise")
+                  }
+                  Divider()
+                  Button(role: .destructive) {
+                    model.requestMeetingDeletion(meeting)
+                  } label: {
+                    Label("Delete meeting…", systemImage: "trash")
+                  }
+                } else {
+                  Button {
+                    model.requestMeetingRename(meeting)
+                  } label: {
+                    Label("Rename…", systemImage: "pencil")
+                  }
+                  Divider()
+                  if meeting.summary != nil {
+                    Button {
+                      model.openMeetingSummary(meeting)
+                    } label: {
+                      Label("Open summary", systemImage: "doc.text")
+                    }
+                  }
+                  Button {
+                    model.openMeetingTranscript(meeting)
+                  } label: {
+                    Label("Open transcript", systemImage: "text.quote")
+                  }
+                  Divider()
+                  Button {
+                    model.recreateMeetingNotes(meeting)
+                  } label: {
+                    Label(
+                      meeting.summary == nil ? "Create summary" : "Recreate summary",
+                      systemImage: meeting.summary == nil ? "sparkles" : "arrow.clockwise")
+                  }
+                  Divider()
+                  Button(role: .destructive) {
+                    model.requestMeetingDeletion(meeting)
+                  } label: {
+                    Label("Delete meeting…", systemImage: "trash")
+                  }
                 }
               } label: {
                 Image(systemName: "ellipsis")
@@ -356,7 +389,7 @@ struct MenuBarView: View {
               .menuIndicator(.hidden)
               .menuStyle(.borderlessButton)
               .fixedSize()
-              .disabled(model.state != .idle)
+              .disabled(!model.canManageMeetings)
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 8)
@@ -416,6 +449,8 @@ struct MenuBarView: View {
   }
 
   private func durationText(for meeting: TodayMeetingSummary) -> String {
+    if model.isMeetingFinalizing(meeting) { return "Finalizing…" }
+    if model.isMeetingRecoverable(meeting) { return "Finalization interrupted · audio retained" }
     guard let endedAt = meeting.endedAt else { return "Transcript saved" }
     let minutes = max(1, Int(endedAt.timeIntervalSince(meeting.startedAt) / 60))
     return "\(minutes) min · Transcript saved"
@@ -426,11 +461,11 @@ struct MenuBarView: View {
       HStack(spacing: 8) {
         if model.recoverableMeetingAvailable {
           Button("Recover capture", systemImage: "arrow.counterclockwise", action: model.recoverLatestMeeting)
-            .disabled(model.state == .processing)
+            .disabled(!model.canManageMeetings)
         }
         if model.enrichmentRetryAvailable {
           Button("Retry notes", systemImage: "sparkles", action: model.retryEnrichment)
-            .disabled(model.state == .processing)
+            .disabled(!model.canManageMeetings)
         }
       }
       .buttonStyle(.bordered)
