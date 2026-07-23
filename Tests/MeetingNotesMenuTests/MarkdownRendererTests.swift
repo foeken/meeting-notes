@@ -501,10 +501,21 @@ import Testing
   #expect(CalendarService.shouldIgnore(title: "Deep focus time"))
   #expect(CalendarService.shouldIgnore(title: "Calendar BLOCK"))
   #expect(CalendarService.shouldIgnore(title: "Focus-time"))
+  #expect(CalendarService.shouldIgnore(title: "Lunch with Sam"))
   #expect(!CalendarService.shouldIgnore(title: "Blocker review"))
   #expect(!CalendarService.shouldIgnore(title: "Focusrite demo"))
   #expect(!CalendarService.shouldIgnore(title: "Customer meeting"))
   #expect(!CalendarService.shouldIgnore(title: nil))
+}
+
+@Test func ignoredMeetingTitleWordsAreCustomizableAndParseCleanly() {
+  #expect(IgnoredMeetingTitlesStore.defaults == ["Block", "Focus", "Lunch"])
+  #expect(
+    IgnoredMeetingTitlesStore.parse("Block, Focus,,  lunch , Standup\nBlock")
+      == ["Block", "Focus", "lunch", "Standup"])
+  #expect(CalendarService.shouldIgnore(title: "Team standup", ignoredWords: ["Standup"]))
+  #expect(!CalendarService.shouldIgnore(title: "Focus", ignoredWords: ["Standup"]))
+  #expect(!CalendarService.shouldIgnore(title: "Anything", ignoredWords: []))
 }
 
 @Test func startupNormalizationRepairsFoldersRenamedByOlderBuilds() async throws {

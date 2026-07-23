@@ -26,7 +26,7 @@ final class CalendarService {
       )
       let candidates = store.events(matching: predicate)
         .filter { !$0.isAllDay && $0.endDate >= now.addingTimeInterval(-5 * 60) }
-        .filter { !Self.shouldIgnore(title: $0.title) }
+        .filter { !Self.shouldIgnore(title: $0.title, ignoredWords: IgnoredMeetingTitlesStore.load()) }
         .sorted {
           abs($0.startDate.timeIntervalSince(now)) < abs($1.startDate.timeIntervalSince(now))
         }
@@ -46,10 +46,14 @@ final class CalendarService {
     } catch { return nil }
   }
 
-  nonisolated static func shouldIgnore(title: String?) -> Bool {
+  nonisolated static func shouldIgnore(
+    title: String?,
+    ignoredWords: [String] = IgnoredMeetingTitlesStore.defaults
+  ) -> Bool {
     guard let title else { return false }
     let words = title.localizedLowercase.split { !$0.isLetter && !$0.isNumber }
-    return words.contains("block") || words.contains("focus")
+    let lowered = Set(words.map(String.init))
+    return ignoredWords.contains { !$0.isEmpty && lowered.contains($0.localizedLowercase) }
   }
 
   private static func participant(_ participant: EKParticipant) -> MeetingParticipant {

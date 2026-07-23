@@ -266,6 +266,22 @@ private struct GeneralSettingsPane: View {
         )
         .font(.caption)
         .foregroundStyle(.secondary)
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Ignore calendar events")
+            .font(.body.weight(.medium))
+          Text("Events whose title contains one of these words are never suggested as meetings. Separate words with commas.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+          TextField("Block, Focus, Lunch", text: $model.ignoredMeetingTitlesDraft)
+            .textFieldStyle(.roundedBorder)
+            .onChange(of: model.ignoredMeetingTitlesDraft) {
+              model.persistIgnoredMeetingTitles()
+            }
+        }
       }
       .padding(28)
     }

@@ -49,6 +49,7 @@ final class AppModel {
   var detectedMeetingApp: String?
   var removeFillerWords = FillerWordSettingsStore.load()
   var meetingNotesLanguage = MeetingNotesLanguageStore.load()
+  var ignoredMeetingTitlesDraft = IgnoredMeetingTitlesStore.load().joined(separator: ", ")
   var automaticTranscriptDeletionEnabled = true
   var transcriptRetentionDays = TranscriptRetentionSettings.defaultDays
   var transcriptRetentionStatusText = ""
@@ -165,6 +166,10 @@ final class AppModel {
       meetingActivityMonitor.stop()
       detectedMeetingApp = nil
     }
+  }
+
+  func persistIgnoredMeetingTitles() {
+    IgnoredMeetingTitlesStore.save(IgnoredMeetingTitlesStore.parse(ignoredMeetingTitlesDraft))
   }
 
   func persistCodexPromptDraft() {
@@ -711,8 +716,34 @@ final class AppModel {
       NSWorkspace.shared.open(url)
       showTransientStatus("Codex task created for this meeting")
       await remoteSync.flush()
+      showCodexProjectHintIfNeeded(projectFolder: projectFolder)
     } catch {
       statusText = "Could not create the Codex task: \(error.localizedDescription)"
+    }
+  }
+
+  private static let codexProjectHintShownKey = "codexProjectHintShown"
+
+  private func showCodexProjectHintIfNeeded(projectFolder: URL) {
+    let defaults = UserDefaults.standard
+    guard !defaults.bool(forKey: Self.codexProjectHintShownKey) else { return }
+    defaults.set(true, forKey: Self.codexProjectHintShownKey)
+
+    let alert = NSAlert()
+    alert.messageText = "See all meeting tasks in Codex"
+    alert.informativeText = """
+      Meeting tasks open in Codex right away, but they are only grouped in the \
+      sidebar once the meeting archive folder is added as a project.
+
+      In Codex, open this folder once as a project:
+      \(projectFolder.path)
+      """
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Reveal Folder")
+    alert.addButton(withTitle: "OK")
+    NSApp.activate(ignoringOtherApps: true)
+    if alert.runModal() == .alertFirstButtonReturn {
+      NSWorkspace.shared.activateFileViewerSelecting([projectFolder])
     }
   }
 
