@@ -19,6 +19,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     updaterController.checkForUpdates(nil)
   }
 
+  private static let welcomeShownKey = "welcomeShown"
+
+  /// Menu-bar-only apps are easy to lose on first launch, especially when the
+  /// icon lands behind the MacBook notch. Shown once, on the first real launch.
+  private func showWelcomeIfNeeded() {
+    let defaults = UserDefaults.standard
+    guard !defaults.bool(forKey: Self.welcomeShownKey) else { return }
+    defaults.set(true, forKey: Self.welcomeShownKey)
+
+    let alert = NSAlert()
+    alert.messageText = "Meeting Notes lives in your menu bar"
+    alert.informativeText = """
+      Look for the waveform icon at the top of your screen and click it to \
+      start recording.
+
+      Don't see it? On a MacBook the icon can hide behind the notch when the \
+      menu bar is full. Quit a few other menu-bar apps to make room and it \
+      will appear.
+      """
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "OK")
+    NSApp.activate(ignoringOtherApps: true)
+    alert.runModal()
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     let arguments = ProcessInfo.processInfo.arguments
     if let flag = arguments.firstIndex(of: "--regenerate-insights"),
@@ -52,7 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
       return
     }
-    guard ProcessInfo.processInfo.arguments.contains("--ui-test") else { return }
+    guard ProcessInfo.processInfo.arguments.contains("--ui-test") else {
+      showWelcomeIfNeeded()
+      return
+    }
     NSApp.setActivationPolicy(.regular)
     let model = Self.sharedModel
     if ProcessInfo.processInfo.arguments.contains("--ui-test-paused") {

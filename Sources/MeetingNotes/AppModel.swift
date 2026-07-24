@@ -811,6 +811,9 @@ final class AppModel {
 
       In Codex, open this folder once as a project:
       \(projectFolder.path)
+
+      Make sure Codex is in Codex mode, not Work mode — in Work mode folders \
+      do not appear as projects.
       """
     alert.alertStyle = .informational
     alert.addButton(withTitle: "Reveal Folder")

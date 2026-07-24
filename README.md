@@ -78,6 +78,16 @@ requirement and prints a warning.
 On first use macOS asks for Calendar, Microphone, and Screen & System Audio
 Recording access. The first transcription downloads the local Nemotron 3.5 model assets.
 
+Good to know on first launch:
+
+- **Nothing seems to happen?** The app lives in the menu bar only — look for
+  the waveform icon at the top of your screen. On MacBooks the icon can hide
+  behind the notch when the menu bar is crowded; quit a few other menu-bar
+  apps to make room and it will appear.
+- **Using the Codex integration?** Make sure the Codex app is in **Codex**
+  mode, not **Work** mode — otherwise directories do not show up as projects,
+  and your meeting tasks will not be grouped under the archive folder.
+
 The **…** menu includes **Check for Updates…**. Automatic update checks and the
 standard update UI are provided by Sparkle.
 
