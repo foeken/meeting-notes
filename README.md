@@ -1,4 +1,5 @@
-<img width="954" height="992" alt="CleanShot 2026-07-24 at 09 59 22@2x" src="https://github.com/user-attachments/assets/6cfeb114-cb79-45e0-a4ee-67a52ceee159" />
+<img width="1254" height="1254" alt="Generated image 1 (1)" src="https://github.com/user-attachments/assets/3b0ea0ec-2799-4515-afca-6d0b940fa90b" />
+
 
 # Meeting Notes
 
