@@ -38,7 +38,7 @@ Before running the release script, verify these prerequisites:
 
 If all prerequisites pass, confirm with the user:
 - The version and build number that will be released
-- Remind them the release is published to `foeken/meeting-notes-menu` on GitHub and the appcast is committed to `main`
+- Remind them the release is published to `foeken/meeting-notes` on GitHub and the appcast is committed to `main`
 
 Then run the release script:
 
@@ -59,8 +59,8 @@ The script runs these steps automatically:
 
 Report the results to the user:
 - Version and build number
-- Download URL on GitHub Releases: `https://github.com/foeken/meeting-notes-menu/releases/tag/vVERSION`
-- Appcast URL: `https://raw.githubusercontent.com/foeken/meeting-notes-menu/main/appcast.xml`
+- Download URL on GitHub Releases: `https://github.com/foeken/meeting-notes/releases/tag/vVERSION`
+- Appcast URL: `https://raw.githubusercontent.com/foeken/meeting-notes/main/appcast.xml`
 
 ## Troubleshooting
 

@@ -51,7 +51,7 @@ syncs can retry.
 Requirements: Apple Silicon, macOS 14+, Xcode 16+.
 
 ```sh
-cd ~/Code/meeting-notes-menu
+cd ~/Code/meeting-notes
 chmod +x scripts/stable-build.sh
 scripts/stable-build.sh
 ```

@@ -2,7 +2,7 @@
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>Meeting Notes Updates</title>
-        <link>https://github.com/foeken/meeting-notes-menu</link>
+        <link>https://github.com/foeken/meeting-notes</link>
         <description>Signed application updates for Meeting Notes.</description>
         <language>en</language>
         <item>
@@ -25,7 +25,7 @@
 - Finalizing an earlier meeting no longer replaces or disrupts a newer active recording.
 - Recovery targets the meeting you selected and no longer treats silent audio as recoverable speech.
 ]]></description>
-            <enclosure url="https://github.com/foeken/meeting-notes-menu/releases/download/v0.3.0/MeetingNotes-0.3.0.dmg" length="5008942" type="application/octet-stream" sparkle:edSignature="g1aC8ui1GppO1f+/OOKi4QXxFoppYFkxj8xB2dKOWoPvtmxdoJ8VMZVCQpAQu9ZK6OQjKwV6FvZMf96n8/uEBw=="/>
+            <enclosure url="https://github.com/foeken/meeting-notes/releases/download/v0.3.0/MeetingNotes-0.3.0.dmg" length="5008942" type="application/octet-stream" sparkle:edSignature="g1aC8ui1GppO1f+/OOKi4QXxFoppYFkxj8xB2dKOWoPvtmxdoJ8VMZVCQpAQu9ZK6OQjKwV6FvZMf96n8/uEBw=="/>
         </item>
     </channel>
 </rss>

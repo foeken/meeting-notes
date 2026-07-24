@@ -240,7 +240,7 @@ enum CodexThreadService {
             method: "initialize",
             params: [
               "clientInfo": [
-                "name": "meeting-notes-menu",
+                "name": "meeting-notes",
                 "title": "Meeting Notes",
                 "version": "1",
               ]
