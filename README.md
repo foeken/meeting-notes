@@ -3,51 +3,50 @@
 
 # Meeting Notes
 
-A deliberately small, native macOS menu-bar utility for private meeting
-transcripts. It records the microphone and system audio as separate tracks,
-writes a timestamped live Markdown transcript during the call, and replaces it
-with a locally generated transcript plus structured meeting notes after
-recording stops.
+**Every meeting, remembered. Nothing leaves your Mac without your say-so.**
 
-The finalized archive always lives in a local directory, using
-`~/Documents/Meetings Notes` by default. An optional SSH destination can receive
-a second copy. The recording Mac keeps a private Application Support spool so
-capture never depends on either destination being reachable and interrupted
-syncs can retry.
+Meeting Notes is a small menu-bar app that records your meetings, transcribes
+them on your own Mac, and turns each one into clean, searchable notes. No
+meeting bots joining your calls, no audio uploaded to someone else's cloud —
+just a quiet icon in your menu bar and a growing archive of everything you
+discussed.
 
-## Product behavior
+## How it works
 
-- Menu-bar-only SwiftUI app; no Dock icon and no meeting dashboard.
-- EventKit suggests the current calendar event title. The title is editable.
-- AVAudioEngine records the microphone as a separate source track.
-- ScreenCaptureKit records system playback, including Zoom and Teams, as the
-  remote side. It does not use meeting bots or join calls.
-- FluidAudio/Nemotron 3.5 creates a streaming multilingual transcript locally,
-  with automatic language detection and roughly 1.12-second model chunks.
-- Recording can be paused and resumed without closing the meeting or losing the
-  existing WAV recovery tracks.
-- While recording, the app prevents idle system sleep. Explicit sleep or closing
-  the lid still pauses capture, and the app remains paused after wake until
-  Resume is pressed. A
-  closed laptop cannot capture while macOS itself is asleep; capture continues
-  without interruption when the Mac remains awake in supported clamshell mode.
-- The sleep-prevention activity is released while paused, processing, or idle.
-- `live.md` is rewritten atomically after every live turn, with an elapsed
-  timestamp on each turn.
-- On stop, FluidAudio runs Nemotron 3.5 ASR on both source tracks. Transcript
-  turns intentionally use the neutral speaker name `Unknown`. OpenAI `gpt-5.6-sol`
-  with medium reasoning then derives
-  the summary, topics, decisions, actions, and evidence timestamps from text only.
-  After success it writes `meeting.md` and `transcript.md`, then deletes
-  `live.md`, `microphone.wav`, and `system.wav`. If final processing fails, the
-  live transcript and WAV tracks are retained for recovery.
-- Long transcripts are processed in bounded chronological chunks and merged
-  through a hierarchical structured-output pass, so enrichment does not depend
-  on the whole meeting fitting in one request.
-- Archive updates always use rsync to the local archive and can additionally
-  sync over SSH. WAV source tracks are excluded and deleted after successful processing by default. Users
-  can enable **Keep audio recordings** to retain both tracks and sync them to the
-  configured archive. Transcription runs locally.
+1. **Press Record.** The app picks up your microphone and the other side of
+   the call (Zoom, Teams, Meet — anything your Mac plays). If a meeting is on
+   your calendar, the title is already filled in.
+2. **Read along live.** A transcript builds while you talk, so you can ask
+   "what was just said?" mid-meeting. Pause and resume whenever you like.
+3. **Stop, and it finishes itself.** After the meeting, the app produces a
+   full word-for-word transcript plus structured notes: a summary, the topics
+   discussed, and timestamps you can jump back to.
+
+Everything lands as plain Markdown files in a folder you choose
+(`Documents/Meetings Notes` by default) — readable anywhere, forever, with no
+lock-in.
+
+## What makes it different
+
+- **Private by design.** Recording and transcription happen entirely on your
+  Mac. Audio recordings are deleted right after processing unless you choose
+  to keep them. Only the finished transcript text is sent to OpenAI to write
+  the structured notes.
+- **Speaks your languages.** Transcription is multilingual with automatic
+  language detection, and your notes can be written in the language you prefer.
+- **Stays out of the way.** No Dock icon, no dashboard, no accounts to manage.
+  It notices when a video call starts, offers to record, and stops when the
+  call ends.
+- **Built for follow-up.** Rename meetings, regenerate summaries, open a
+  Codex task about any meeting, and set old word-for-word transcripts to
+  delete themselves automatically after a period you choose.
+- **Optional second copy on another Mac.** If you keep an always-on Mac (a
+  home server, an office machine), the app can mirror your archive to it over
+  SSH — handy for backup or for running search and indexing tools where the
+  archive lives. This is entirely optional; everything works with just the
+  local folder.
+
+---
 
 ## Build and run
 
