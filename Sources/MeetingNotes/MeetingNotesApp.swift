@@ -114,7 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct MeetingNotesMenuApp: App {
+struct MeetingNotesApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   @State private var model = AppModel()
 

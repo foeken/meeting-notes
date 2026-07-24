@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>Meeting Notes</string>
 	<key>CFBundleExecutable</key>
-	<string>MeetingNotesMenu</string>
+	<string>MeetingNotes</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>

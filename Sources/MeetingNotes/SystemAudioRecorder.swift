@@ -7,7 +7,7 @@ import ScreenCaptureKit
 final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
   var onSamples: (@Sendable ([Int16]) -> Void)?
 
-  private let queue = DispatchQueue(label: "MeetingNotesMenu.system-audio")
+  private let queue = DispatchQueue(label: "MeetingNotes.system-audio")
   private let lock = NSLock()
   private var stream: SCStream?
   private var handle: FileHandle?

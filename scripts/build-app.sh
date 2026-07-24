@@ -8,8 +8,8 @@ ARCH=$(uname -m)
 swift build --package-path "$ROOT" -c release
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
-cp "$ROOT/.build/$ARCH-apple-macosx/release/MeetingNotesMenu" "$APP/Contents/MacOS/MeetingNotesMenu"
-install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP/Contents/MacOS/MeetingNotesMenu"
+cp "$ROOT/.build/$ARCH-apple-macosx/release/MeetingNotes" "$APP/Contents/MacOS/MeetingNotes"
+install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP/Contents/MacOS/MeetingNotes"
 SPARKLE_FRAMEWORK=$(find "$ROOT/.build/artifacts" -path '*/Sparkle.framework' -type d -print -quit)
 if [[ -z "$SPARKLE_FRAMEWORK" ]]; then
   echo "error: Sparkle.framework was not resolved by Swift Package Manager" >&2

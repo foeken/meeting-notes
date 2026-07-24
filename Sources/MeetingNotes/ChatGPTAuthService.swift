@@ -86,7 +86,7 @@ actor ChatGPTAuthService {
 
   private var authHome: URL {
     fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appending(path: "MeetingNotesMenu/ChatGPTAuth", directoryHint: .isDirectory)
+      .appending(path: "MeetingNotes/ChatGPTAuth", directoryHint: .isDirectory)
   }
 
   private var executableURL: URL? {

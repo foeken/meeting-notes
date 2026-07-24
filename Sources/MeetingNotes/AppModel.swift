@@ -110,7 +110,7 @@ final class AppModel {
   init() {
     let archiveConfiguration = ArchiveSettingsStore.load()
     root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appending(path: "MeetingNotesMenu/Spool", directoryHint: .isDirectory)
+      .appending(path: "MeetingNotes/Spool", directoryHint: .isDirectory)
     remoteSync = RemoteSyncService(configuration: archiveConfiguration)
     store = MeetingStore(root: root, sync: remoteSync)
     live = LiveTranscriptionEngine(transcriber: transcriber)
@@ -266,7 +266,7 @@ final class AppModel {
     let target = targetFolder.standardizedFileURL
     guard target.path.hasPrefix(spool + "/") else {
       throw NSError(
-        domain: "MeetingNotesMenu", code: 8,
+        domain: "MeetingNotes", code: 8,
         userInfo: [NSLocalizedDescriptionKey: "The repair target is outside the private spool"])
     }
     let document = try await store.load(folder: target)
@@ -292,7 +292,7 @@ final class AppModel {
     await remoteSync.flush()
     if let syncError = await remoteSync.lastError {
       throw NSError(
-        domain: "MeetingNotesMenu", code: 9,
+        domain: "MeetingNotes", code: 9,
         userInfo: [NSLocalizedDescriptionKey: "Transcript repaired locally; sync failed: \(syncError)"])
     }
   }
@@ -302,13 +302,13 @@ final class AppModel {
     let target = targetFolder.standardizedFileURL
     guard target.path.hasPrefix(spool + "/") else {
       throw NSError(
-        domain: "MeetingNotesMenu", code: 10,
+        domain: "MeetingNotes", code: 10,
         userInfo: [NSLocalizedDescriptionKey: "The insights target is outside the private spool"])
     }
     let meeting = try await store.load(folder: target)
     guard meeting.status == .complete, !meeting.transcript.isEmpty else {
       throw NSError(
-        domain: "MeetingNotesMenu", code: 11,
+        domain: "MeetingNotes", code: 11,
         userInfo: [NSLocalizedDescriptionKey: "Only a completed meeting with a transcript can be enriched"])
     }
     let insights = try await enricher.enrich(
@@ -317,7 +317,7 @@ final class AppModel {
     await remoteSync.flush()
     if let syncError = await remoteSync.lastError {
       throw NSError(
-        domain: "MeetingNotesMenu", code: 12,
+        domain: "MeetingNotes", code: 12,
         userInfo: [NSLocalizedDescriptionKey: "Insights saved locally; sync failed: \(syncError)"])
     }
   }
@@ -1141,7 +1141,7 @@ final class AppModel {
       let (document, folder) = try await store.completedMeeting(id: meeting.id)
       guard document.transcriptDeletedAt == nil, !document.transcript.isEmpty else {
         throw NSError(
-          domain: "MeetingNotesMenu", code: 13,
+          domain: "MeetingNotes", code: 13,
           userInfo: [
             NSLocalizedDescriptionKey:
               "The word-for-word transcript has been deleted, so these notes cannot be regenerated."
@@ -1211,7 +1211,7 @@ final class AppModel {
     do {
       guard await AVCaptureDevice.requestAccess(for: .audio) else {
         throw NSError(
-          domain: "MeetingNotesMenu", code: 1,
+          domain: "MeetingNotes", code: 1,
           userInfo: [NSLocalizedDescriptionKey: "Microphone access was denied"])
       }
       let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -8,7 +8,7 @@ import Testing
   #expect(!OpenAIEnricher.summaryGuidance.localizedLowercase.contains("concise"))
 }
 
-@testable import MeetingNotesMenu
+@testable import MeetingNotes
 
 @Test func fillerWordFilterRemovesPausesWithoutDamagingWords() {
   #expect(FillerWordFilter.apply("So uh I was thinking um about this") == "So I was thinking about this")
@@ -740,7 +740,7 @@ import Testing
   #expect(entries[0] == VocabularyEntry(term: "Acme", aliases: ["ack me", "acme corp"]))
   #expect(entries[1] == VocabularyEntry(term: "Acme Suite", aliases: []))
 
-  let suite = "MeetingNotesMenuVocabularyTests-\(UUID().uuidString)"
+  let suite = "MeetingNotesVocabularyTests-\(UUID().uuidString)"
   let defaults = try #require(UserDefaults(suiteName: suite))
   defer { defaults.removePersistentDomain(forName: suite) }
   VocabularySettingsStore.save(VocabularySettingsStore.formatted(entries), to: defaults)
@@ -755,7 +755,7 @@ import Testing
 }
 
 @Test func freshArchiveSettingsAreLocalAndRoundTrip() throws {
-  let suite = "MeetingNotesMenuTests-\(UUID().uuidString)"
+  let suite = "MeetingNotesTests-\(UUID().uuidString)"
   let defaults = try #require(UserDefaults(suiteName: suite))
   defer { defaults.removePersistentDomain(forName: suite) }
 
@@ -792,7 +792,7 @@ import Testing
 }
 
 @Test func legacyRemoteArchiveMigratesToLocalFirstStorage() throws {
-  let suite = "MeetingNotesMenuLegacyArchiveTests-\(UUID().uuidString)"
+  let suite = "MeetingNotesLegacyArchiveTests-\(UUID().uuidString)"
   let defaults = try #require(UserDefaults(suiteName: suite))
   defer { defaults.removePersistentDomain(forName: suite) }
   defaults.set("remote", forKey: "archive.destination")
@@ -812,7 +812,7 @@ import Testing
 }
 
 @Test func tanaSettingsAreOptInAndGraphSpecific() throws {
-  let suite = "MeetingNotesMenuTanaTests-\(UUID().uuidString)"
+  let suite = "MeetingNotesTanaTests-\(UUID().uuidString)"
   let defaults = try #require(UserDefaults(suiteName: suite))
   defer { defaults.removePersistentDomain(forName: suite) }
 
@@ -911,7 +911,7 @@ import Testing
 }
 
 @Test func audioRetentionDefaultsOffAndRoundTrips() throws {
-  let suite = "MeetingNotesMenuAudioRetentionTests-\(UUID().uuidString)"
+  let suite = "MeetingNotesAudioRetentionTests-\(UUID().uuidString)"
   let defaults = try #require(UserDefaults(suiteName: suite))
   defer { defaults.removePersistentDomain(forName: suite) }
 
@@ -923,7 +923,7 @@ import Testing
 }
 
 @Test func transcriptRetentionDefaultsToNinetyDaysAndCanBeDisabled() throws {
-  let suite = "MeetingNotesMenuTranscriptRetentionTests-\(UUID().uuidString)"
+  let suite = "MeetingNotesTranscriptRetentionTests-\(UUID().uuidString)"
   let defaults = try #require(UserDefaults(suiteName: suite))
   defer { defaults.removePersistentDomain(forName: suite) }
 
@@ -938,7 +938,7 @@ import Testing
 }
 
 @Test func meetingNotesLanguageDefaultsToTranscriptAndRoundTrips() throws {
-  let suite = "MeetingNotesMenuLanguageTests-\(UUID().uuidString)"
+  let suite = "MeetingNotesLanguageTests-\(UUID().uuidString)"
   let defaults = try #require(UserDefaults(suiteName: suite))
   defer { defaults.removePersistentDomain(forName: suite) }
 

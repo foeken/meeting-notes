@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-  name: "MeetingNotesMenu",
+  name: "MeetingNotes",
   platforms: [.macOS(.v14)],
   products: [
-    .executable(name: "MeetingNotesMenu", targets: ["MeetingNotesMenu"])
+    .executable(name: "MeetingNotes", targets: ["MeetingNotes"])
   ],
   dependencies: [
     .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.1"),
@@ -13,7 +13,7 @@ let package = Package(
   ],
   targets: [
     .executableTarget(
-      name: "MeetingNotesMenu",
+      name: "MeetingNotes",
       dependencies: [
         .product(name: "FluidAudio", package: "FluidAudio"),
         .product(name: "Sparkle", package: "Sparkle"),
@@ -29,8 +29,8 @@ let package = Package(
       ]
     ),
     .testTarget(
-      name: "MeetingNotesMenuTests",
-      dependencies: ["MeetingNotesMenu"]
+      name: "MeetingNotesTests",
+      dependencies: ["MeetingNotes"]
     ),
   ]
 )

@@ -3,11 +3,11 @@ set -euo pipefail
 
 ROOT=${0:A:h:h}
 APP="$ROOT/Meeting Notes.app"
-EXECUTABLE="$APP/Contents/MacOS/MeetingNotesMenu"
-POINTER="$HOME/Library/Application Support/MeetingNotesMenu/Spool/current.json"
+EXECUTABLE="$APP/Contents/MacOS/MeetingNotes"
+POINTER="$HOME/Library/Application Support/MeetingNotes/Spool/current.json"
 
 if [[ "${1:-}" == "--recover-running-meeting" ]]; then
-  if pgrep -x MeetingNotesMenu >/dev/null; then
+  if pgrep -x MeetingNotes >/dev/null; then
     echo "error: Meeting Notes is already running" >&2
     exit 5
   fi
@@ -30,7 +30,7 @@ if [[ "${1:-}" == "--recover-running-meeting" ]]; then
   plutil -lint "$APP/Contents/Info.plist"
   open -n "$APP"
   for _ in {1..50}; do
-    PIDS=(${(f)"$(pgrep -x MeetingNotesMenu || true)"})
+    PIDS=(${(f)"$(pgrep -x MeetingNotes || true)"})
     if (( ${#PIDS[@]} == 1 )); then
       RUNNING_COMMAND=$(ps -p "$PIDS[1]" -o command=)
       if [[ "$RUNNING_COMMAND" == "$EXECUTABLE" ]]; then
@@ -54,14 +54,14 @@ if [[ -f "$POINTER" ]]; then
 fi
 
 echo "Stopping old Meeting Notes processes…"
-killall MeetingNotesMenu 2>/dev/null || true
+killall MeetingNotes 2>/dev/null || true
 for _ in {1..50}; do
-  if ! pgrep -x MeetingNotesMenu >/dev/null; then
+  if ! pgrep -x MeetingNotes >/dev/null; then
     break
   fi
   sleep 0.1
 done
-if pgrep -x MeetingNotesMenu >/dev/null; then
+if pgrep -x MeetingNotes >/dev/null; then
   echo "error: an old Meeting Notes process did not stop" >&2
   exit 3
 fi
@@ -91,7 +91,7 @@ plutil -lint "$APP/Contents/Info.plist"
 echo "Launching one fresh instance…"
 open -n "$APP"
 for _ in {1..50}; do
-  PIDS=(${(f)"$(pgrep -x MeetingNotesMenu || true)"})
+  PIDS=(${(f)"$(pgrep -x MeetingNotes || true)"})
   if (( ${#PIDS[@]} == 1 )); then
     RUNNING_COMMAND=$(ps -p "$PIDS[1]" -o command=)
     if [[ "$RUNNING_COMMAND" == "$EXECUTABLE" ]]; then
@@ -102,8 +102,8 @@ for _ in {1..50}; do
   sleep 0.1
 done
 
-PIDS=(${(f)"$(pgrep -x MeetingNotesMenu || true)"})
-echo "error: expected exactly one $EXECUTABLE process; found ${#PIDS[@]} MeetingNotesMenu process(es)" >&2
+PIDS=(${(f)"$(pgrep -x MeetingNotes || true)"})
+echo "error: expected exactly one $EXECUTABLE process; found ${#PIDS[@]} MeetingNotes process(es)" >&2
 for PID in $PIDS; do
   ps -p "$PID" -o pid=,command= >&2 || true
 done
