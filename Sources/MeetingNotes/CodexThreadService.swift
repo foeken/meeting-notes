@@ -112,6 +112,15 @@ enum CodexThreadService {
     Briefly confirm which meeting artifact you used and that you are ready. Do not summarize the meeting unless I ask.
     """
 
+  static let defaultSummaryMessageTemplate = """
+    The final notes for “{{meeting_title}}” are ready.
+
+    Re-read `meeting.md` in {{meeting_folder}} — it now contains the structured summary. \
+    `transcript.md` holds the full timestamped evidence.
+
+    Treat this as updated context. Wait for my next question before responding.
+    """
+
   enum ServiceError: LocalizedError {
     case appNotInstalled
     case projectFolderUnavailable
@@ -168,6 +177,12 @@ enum CodexThreadService {
     for context: CodexMeetingContext,
     template: String = defaultPromptTemplate
   ) -> String {
+    renderTemplate(template, context: context)
+  }
+
+  static func renderTemplate(
+    _ template: String, context: CodexMeetingContext, summary: String? = nil
+  ) -> String {
     let dateFormatter = ISO8601DateFormatter()
     let replacements = [
       "{{meeting_title}}": context.title,
@@ -175,6 +190,7 @@ enum CodexThreadService {
       "{{meeting_date}}": dateFormatter.string(from: context.startedAt),
       "{{meeting_folder}}": context.meetingFolder.path,
       "{{project_folder}}": context.projectFolder.path,
+      "{{summary}}": summary ?? "",
     ]
     return replacements.reduce(template) { result, replacement in
       result.replacingOccurrences(of: replacement.key, with: replacement.value)
@@ -283,6 +299,66 @@ enum CodexThreadService {
             params: ["threadId": threadID, "turnId": turnID])
           _ = try connection.response(id: 5)
           continuation.resume(returning: threadID)
+        } catch {
+          continuation.resume(throwing: error)
+        }
+      }
+    }
+  }
+
+  /// Posts a message into an existing Codex task without triggering model
+  /// generation, mirroring how the initial meeting context is preloaded:
+  /// resume the thread, start a turn with the message, wait until the user
+  /// message is visible, then interrupt.
+  static func sendMessage(_ message: String, toThread threadID: String) async throws {
+    guard let executable = executableURL() else { throw ServiceError.appNotInstalled }
+
+    try await withCheckedThrowingContinuation {
+      (continuation: CheckedContinuation<Void, Error>) in
+      DispatchQueue.global(qos: .utility).async {
+        do {
+          let connection = try CodexRPCConnection(executable: executable)
+          connection.startDeadline(seconds: 30)
+          defer { connection.cancelDeadline() }
+          try connection.sendRequest(
+            id: 1,
+            method: "initialize",
+            params: [
+              "clientInfo": [
+                "name": "meeting-notes",
+                "title": "Meeting Notes",
+                "version": "1",
+              ]
+            ])
+          _ = try connection.response(id: 1)
+          try connection.sendNotification(method: "initialized", params: [:])
+
+          try connection.sendRequest(
+            id: 2,
+            method: "thread/resume",
+            params: ["threadId": threadID])
+          _ = try connection.response(id: 2)
+
+          try connection.sendRequest(
+            id: 3,
+            method: "turn/start",
+            params: [
+              "threadId": threadID,
+              "input": [["type": "text", "text": message]],
+            ])
+          let turnResponse = try connection.response(id: 3)
+          guard let turnResult = turnResponse["result"] as? [String: Any],
+            let turn = turnResult["turn"] as? [String: Any],
+            let turnID = turn["id"] as? String,
+            !turnID.isEmpty
+          else { throw ServiceError.protocolError("Codex returned no turn ID.") }
+          try connection.waitUntilUserMessageStarts(threadID: threadID)
+          try connection.sendRequest(
+            id: 4,
+            method: "turn/interrupt",
+            params: ["threadId": threadID, "turnId": turnID])
+          _ = try connection.response(id: 4)
+          continuation.resume()
         } catch {
           continuation.resume(throwing: error)
         }

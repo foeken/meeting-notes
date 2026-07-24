@@ -303,6 +303,23 @@ private struct CodexSettingsPane: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Toggle(isOn: Binding(
+            get: { model.codexAutoCreateThreads },
+            set: { model.setCodexAutoCreateThreads($0) }
+          )) {
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Create tasks automatically")
+              Text("Start a Codex task in the background whenever a recording begins.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+          }
+          .toggleStyle(.switch)
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Meeting task prompt")
             .font(.headline)
           Text("Sent when a new Codex task is created for a meeting. Existing tasks are not changed.")
@@ -336,6 +353,55 @@ private struct CodexSettingsPane: View {
             }
             Spacer()
             Button("Restore Default", action: model.restoreDefaultCodexPrompt)
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Toggle(isOn: Binding(
+            get: { model.codexSummaryMessageEnabled },
+            set: { model.setCodexSummaryMessageEnabled($0) }
+          )) {
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Notify the task when notes are ready")
+              Text("Posts a message into the meeting's existing Codex task after the summary is created.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+          }
+          .toggleStyle(.switch)
+
+          if model.codexSummaryMessageEnabled {
+            TextEditor(text: $model.codexSummaryMessageDraft)
+              .font(.system(.body, design: .monospaced))
+              .scrollContentBackground(.hidden)
+              .padding(8)
+              .frame(height: 140)
+              .background(
+                Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+              .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                  .stroke(Color(nsColor: .separatorColor))
+              }
+              .onChange(of: model.codexSummaryMessageDraft) {
+                model.persistCodexSummaryMessageDraft()
+              }
+
+            Text("Placeholders also include {{summary}} — the finished meeting summary text.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .textSelection(.enabled)
+
+            HStack {
+              if !model.codexSummaryMessageStatusText.isEmpty {
+                Text(model.codexSummaryMessageStatusText)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              Spacer()
+              Button("Restore Default", action: model.restoreDefaultCodexSummaryMessage)
+            }
           }
         }
       }

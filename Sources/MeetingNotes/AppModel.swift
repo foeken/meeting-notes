@@ -77,6 +77,10 @@ final class AppModel {
   var codexLaunchingCurrentMeeting = false
   var codexPromptDraft = CodexPromptSettingsStore.load()
   var codexPromptStatusText = ""
+  var codexSummaryMessageDraft = CodexPromptSettingsStore.loadSummaryMessage()
+  var codexSummaryMessageEnabled = CodexPromptSettingsStore.summaryMessageEnabled()
+  var codexSummaryMessageStatusText = ""
+  var codexAutoCreateThreads = CodexPromptSettingsStore.autoCreateThreads()
 
   var tanaSupertagChoices: [TanaSupertagChoice] {
     TanaSupertagChoice.selectedFirst(
@@ -202,6 +206,34 @@ final class AppModel {
   func restoreDefaultCodexPrompt() {
     codexPromptDraft = CodexPromptSettingsStore.restoreDefault()
     codexPromptStatusText = "Default prompt restored."
+  }
+
+  func persistCodexSummaryMessageDraft() {
+    guard !codexSummaryMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      codexSummaryMessageStatusText = "The message cannot be empty."
+      return
+    }
+    CodexPromptSettingsStore.saveSummaryMessage(codexSummaryMessageDraft)
+    if codexSummaryMessageStatusText == "The message cannot be empty." {
+      codexSummaryMessageStatusText = ""
+    }
+  }
+
+  func restoreDefaultCodexSummaryMessage() {
+    codexSummaryMessageDraft = CodexPromptSettingsStore.restoreDefaultSummaryMessage()
+    codexSummaryMessageStatusText = "Default message restored."
+  }
+
+  func setCodexSummaryMessageEnabled(_ enabled: Bool) {
+    guard codexSummaryMessageEnabled != enabled else { return }
+    codexSummaryMessageEnabled = enabled
+    CodexPromptSettingsStore.saveSummaryMessageEnabled(enabled)
+  }
+
+  func setCodexAutoCreateThreads(_ enabled: Bool) {
+    guard codexAutoCreateThreads != enabled else { return }
+    codexAutoCreateThreads = enabled
+    CodexPromptSettingsStore.saveAutoCreateThreads(enabled)
   }
 
   func setRemoveFillerWords(_ enabled: Bool) {
@@ -749,6 +781,25 @@ final class AppModel {
     }
   }
 
+  /// Builds the Codex context for a meeting folder inside the private spool,
+  /// mapped onto the user-visible archive location.
+  private func codexContext(document: MeetingDocument, folder: URL) -> CodexMeetingContext? {
+    let projectPath = (archiveConfiguration.localPath as NSString).expandingTildeInPath
+    let projectFolder = URL(fileURLWithPath: projectPath, isDirectory: true)
+    let spoolRoot = root.standardizedFileURL.path + "/"
+    let spoolFolder = folder.standardizedFileURL.path
+    guard spoolFolder.hasPrefix(spoolRoot) else { return nil }
+    let relativeMeetingPath = String(spoolFolder.dropFirst(spoolRoot.count))
+    let archivedMeetingFolder = projectFolder.appending(
+      path: relativeMeetingPath, directoryHint: .isDirectory)
+    return CodexMeetingContext(
+      meetingID: document.id,
+      title: document.title,
+      startedAt: document.startedAt,
+      projectFolder: projectFolder,
+      meetingFolder: archivedMeetingFolder)
+  }
+
   private func openMeetingInCodex(document: MeetingDocument, folder: URL) async {
     if let threadID = document.codexThreadID, !threadID.isEmpty,
       let url = CodexThreadService.threadURL(threadID)
@@ -758,26 +809,11 @@ final class AppModel {
       return
     }
 
-    let projectPath = (archiveConfiguration.localPath as NSString).expandingTildeInPath
-    let projectFolder = URL(
-      fileURLWithPath: projectPath,
-      isDirectory: true)
-    let spoolRoot = root.standardizedFileURL.path + "/"
-    let spoolFolder = folder.standardizedFileURL.path
-    guard spoolFolder.hasPrefix(spoolRoot) else {
+    guard let context = codexContext(document: document, folder: folder) else {
       reportError("Could not locate the meeting inside the local archive.")
       return
     }
-    let relativeMeetingPath = String(spoolFolder.dropFirst(spoolRoot.count))
     await remoteSync.flush()
-    let archivedMeetingFolder = projectFolder.appending(
-      path: relativeMeetingPath, directoryHint: .isDirectory)
-    let context = CodexMeetingContext(
-      meetingID: document.id,
-      title: document.title,
-      startedAt: document.startedAt,
-      projectFolder: projectFolder,
-      meetingFolder: archivedMeetingFolder)
     statusText = "Creating Codex task…"
     do {
       let threadID = try await CodexThreadService.createThread(
@@ -790,9 +826,46 @@ final class AppModel {
       NSWorkspace.shared.open(url)
       showTransientStatus("Codex task created for this meeting")
       await remoteSync.flush()
-      showCodexProjectHintIfNeeded(projectFolder: projectFolder)
+      showCodexProjectHintIfNeeded(projectFolder: context.projectFolder)
     } catch {
       reportError("Could not create the Codex task: \(error.localizedDescription)")
+    }
+  }
+
+  /// Silently creates a Codex task for a just-started meeting when the
+  /// auto-create option is on. Never steals focus and never surfaces errors
+  /// beyond a quiet status line: recording is the primary job here.
+  private func autoCreateCodexThreadIfEnabled(document: MeetingDocument, folder: URL) {
+    guard codexAutoCreateThreads else { return }
+    guard document.codexThreadID == nil else { return }
+    guard let context = codexContext(document: document, folder: folder) else { return }
+    Task { [store] in
+      do {
+        let threadID = try await CodexThreadService.createThread(
+          for: context,
+          promptTemplate: CodexPromptSettingsStore.load())
+        try await store.setCodexThreadID(threadID, for: document.id)
+      } catch {
+        // Auto-creation is best-effort; the Discuss button remains available.
+      }
+    }
+  }
+
+  /// Notifies the meeting's Codex task that the structured summary is ready.
+  /// Runs only when the task already exists; posts without triggering a reply.
+  private func notifyCodexSummaryReady(meetingID: UUID) async {
+    guard codexSummaryMessageEnabled else { return }
+    do {
+      let (document, folder) = try await store.completedMeeting(id: meetingID)
+      guard let threadID = document.codexThreadID, !threadID.isEmpty else { return }
+      guard let context = codexContext(document: document, folder: folder) else { return }
+      let message = CodexThreadService.renderTemplate(
+        CodexPromptSettingsStore.loadSummaryMessage(),
+        context: context,
+        summary: document.insights?.summary)
+      try await CodexThreadService.sendMessage(message, toThread: threadID)
+    } catch {
+      // Best-effort: the summary itself is already saved and synced.
     }
   }
 
@@ -935,17 +1008,22 @@ final class AppModel {
     state = .processing
     if reportStatus { statusText = "Creating delayed meeting notes…" }
     var lastError: Error?
+    var enrichedMeetingIDs: [UUID] = []
     for folder in folders {
       do {
         let meeting = try await store.load(folder: folder)
         let insights = try await enricher.enrich(
           meeting, checkpointURL: folder.appending(path: "enrichment-checkpoint.json"))
         try await store.setInsights(insights)
+        enrichedMeetingIDs.append(meeting.id)
       } catch {
         lastError = error
       }
     }
     await remoteSync.flush()
+    for meetingID in enrichedMeetingIDs {
+      await notifyCodexSummaryReady(meetingID: meetingID)
+    }
     await refreshMeetingDay()
     state = .idle
     enrichmentRetryAvailable = lastError != nil
@@ -1170,6 +1248,7 @@ final class AppModel {
       try await store.setCompletedMeetingInsights(
         insights, meetingID: document.id, in: folder)
       await remoteSync.flush()
+      await notifyCodexSummaryReady(meetingID: document.id)
       await refreshMeetingDay()
       state = .idle
       if let syncError = await remoteSync.lastError {
@@ -1245,6 +1324,9 @@ final class AppModel {
       let startedDocument = try await store.begin(
         title: cleanTitle.isEmpty ? "Meeting" : cleanTitle, calendar: calendarMetadata)
       activeRecordingMeetingID = startedDocument.id
+      if let startedFolder = await store.currentFolder() {
+        autoCreateCodexThreadIfEnabled(document: startedDocument, folder: startedFolder)
+      }
       guard let microphoneURL = await store.audioURL(named: "microphone.wav"),
         let systemURL = await store.audioURL(named: "system.wav")
       else { throw CocoaError(.fileNoSuchFile) }
@@ -1502,6 +1584,7 @@ final class AppModel {
       reportError("Finalization retained: \(error.localizedDescription)")
       return
     }
+    if insights != nil { await notifyCodexSummaryReady(meetingID: meetingID) }
 
     // Once meeting.json and the Markdown artifacts are complete, housekeeping
     // failures must not downgrade the meeting back to failed.
@@ -1592,6 +1675,7 @@ final class AppModel {
       }
       try await store.finalize(insights: insights)
       finalized = true
+      if insights != nil { await notifyCodexSummaryReady(meetingID: recoveredDocument.id) }
       var cleanupWarning: String?
       if !keepAudioAfterProcessing {
         do { try await store.removeAudioFiles() } catch {
@@ -1642,6 +1726,7 @@ final class AppModel {
       )
       try await store.setInsights(insights)
       await remoteSync.flush()
+      await notifyCodexSummaryReady(meetingID: meeting.id)
       enrichmentRetryAvailable = false
       state = .idle
       await refreshMeetingDay()

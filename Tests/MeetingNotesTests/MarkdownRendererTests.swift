@@ -86,6 +86,19 @@ import Testing
   let threadURL = try #require(CodexThreadService.threadURL("thread-123"))
   #expect(threadURL.absoluteString == "codex://threads/thread-123")
 
+  let summaryMessage = CodexThreadService.renderTemplate(
+    CodexThreadService.defaultSummaryMessageTemplate, context: context)
+  #expect(summaryMessage.contains("Portfolio review"))
+  #expect(summaryMessage.contains("Re-read `meeting.md`"))
+  #expect(summaryMessage.contains("/Users/test/Meeting Notes/2026/01/01/review"))
+  #expect(summaryMessage.contains("Wait for my next question"))
+
+  let customMessage = CodexThreadService.renderTemplate(
+    "Notes ready for {{meeting_title}}: {{summary}}",
+    context: context,
+    summary: "We agreed to ship.")
+  #expect(customMessage == "Notes ready for Portfolio review: We agreed to ship.")
+
   let startParams = CodexThreadService.threadStartParams(for: context)
   #expect(startParams["cwd"] as? String == "/Users/test/Meeting Notes")
   #expect(startParams["runtimeWorkspaceRoots"] == nil)
