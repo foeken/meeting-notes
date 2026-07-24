@@ -4,6 +4,5 @@
 DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
-MeetingNotesMenu.app/
 Meeting Notes.app/
 meeting-notes.zip
