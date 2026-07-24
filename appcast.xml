@@ -6,26 +6,33 @@
         <description>Signed application updates for Meeting Notes.</description>
         <language>en</language>
         <item>
-            <title>0.3.0</title>
-            <pubDate>Thu, 23 Jul 2026 22:35:27 +0200</pubDate>
-            <sparkle:version>3</sparkle:version>
-            <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
+            <title>1.0.0</title>
+            <pubDate>Fri, 24 Jul 2026 10:49:16 +0200</pubDate>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## What’s new
+            <description sparkle:format="markdown"><![CDATA[## Meeting Notes 1.0
 
-- Start a new recording immediately while the previous meeting finalizes safely in the background.
-- Interrupted captures remain visible after relaunch and can be retried or deleted per meeting.
-- Stopping no longer waits for a slow live-preview transcription prediction.
-- Meeting menus now include separate actions to open the summary and transcript.
-- Selected Tana Supertags are shown first, with both selected and unselected groups kept alphabetical.
+The first stable release.
 
-## Reliability
+### Highlights
 
-- Finalizing an earlier meeting no longer replaces or disrupts a newer active recording.
-- Recovery targets the meeting you selected and no longer treats silent audio as recoverable speech.
+- **Renamed and refocused**: the app, repository, and internals are now simply **Meeting Notes**.
+- **Full code review hardening** across capture, transcription, UI, and services:
+  - Dutch words like "er" are no longer stripped by the filler-word filter.
+  - Transcripts can no longer drop or duplicate turns in topic sections; an "Other" section catches uncovered turns.
+  - Live transcript timestamps now follow the recording clock across pause/resume.
+  - Live audio is delivered in strict order, and quiet recordings are detected more reliably.
+  - Back-to-back meeting notifications re-arm correctly, and video-call auto-stop is steadier.
+  - Return now cancels a meeting deletion instead of confirming it; busy days show all meetings.
+  - Codex task creation can no longer hang indefinitely, and broken pipes no longer crash the app.
+  - Tana enrichment paginates past 1,000 entities and surfaces Keychain errors.
+  - Calendar access is only requested when you press Record.
+  - Accessibility labels added throughout the menu bar UI and settings.
+- **Safer release/build tooling**: inside-out code signing and a self-cleaning release script.
 ]]></description>
-            <enclosure url="https://github.com/foeken/meeting-notes/releases/download/v0.3.0/MeetingNotes-0.3.0.dmg" length="5008942" type="application/octet-stream" sparkle:edSignature="g1aC8ui1GppO1f+/OOKi4QXxFoppYFkxj8xB2dKOWoPvtmxdoJ8VMZVCQpAQu9ZK6OQjKwV6FvZMf96n8/uEBw=="/>
+            <enclosure url="https://github.com/foeken/meeting-notes/releases/download/v1.0.0/MeetingNotes-1.0.0.dmg" length="5057425" type="application/octet-stream" sparkle:edSignature="oU2uGlDRa9ZY/z2I84GgChox7d0Jq8dcHvby4Jsx7/oH7+tPdBc4N67eT5s/fZqEG1iSD8XpTDgfIGXMi3zdDg=="/>
         </item>
     </channel>
 </rss>
