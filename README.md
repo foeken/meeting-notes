@@ -46,6 +46,18 @@ lock-in.
   archive lives. This is entirely optional; everything works with just the
   local folder.
 
+## Why this exists
+
+Meeting Notes grew out of a simple shift: taking notes used to be how you
+stayed present in a meeting. With live local transcription, the app captures
+*what was said*, so your own typing can capture what you think it means and
+what should happen next. Each meeting can even open its own Codex task, with
+the live transcript as context — ask "what was just discussed?" mid-call, or
+extract decisions and follow-ups when it suits you.
+
+André wrote about how this fits into a full AI-first daily workflow in
+[After Orbital: Codex as My Daily Driver](https://dreet.je/writing/after-orbital/).
+
 ---
 
 ## Build and run
