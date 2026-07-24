@@ -1,24 +1,40 @@
 import Foundation
 
 enum MarkdownRenderer {
-  static func render(_ meeting: MeetingDocument) -> String { renderLive(meeting) }
-
   static func renderLive(_ meeting: MeetingDocument) -> String {
     frontmatter(meeting, artifact: "live-transcript")
-      + "\n# \(meeting.title) — Live transcript\n\n"
+      + "\n# \(headingTitle(meeting.title)) — Live transcript\n\n"
       + "> This is provisional live ASR and may change after final transcription.\n\n"
       + renderTurns(meeting.transcript)
   }
 
   static func renderTranscript(_ meeting: MeetingDocument) -> String {
     var output = frontmatter(meeting, artifact: "final-transcript")
-    output += "\n# \(meeting.title) — Transcript\n\n"
+    output += "\n# \(headingTitle(meeting.title)) — Transcript\n\n"
     let turns = meeting.transcript.sorted { $0.start < $1.start }
     if let topics = meeting.insights?.topics, !topics.isEmpty {
-      for topic in topics.sorted(by: { $0.start < $1.start }) {
+      let sortedTopics = topics.sorted { $0.start < $1.start }
+      // Assign every turn to exactly one section: the first topic range it
+      // overlaps, or a trailing "Other" section when it matches no topic.
+      var turnsByTopic: [[TranscriptTurn]] = Array(repeating: [], count: sortedTopics.count)
+      var unassigned: [TranscriptTurn] = []
+      for turn in turns {
+        if let index = sortedTopics.firstIndex(where: {
+          turn.end >= $0.start && turn.start <= $0.end
+        }) {
+          turnsByTopic[index].append(turn)
+        } else {
+          unassigned.append(turn)
+        }
+      }
+      for (index, topic) in sortedTopics.enumerated() {
         output +=
           "## \(topic.title) [\(topic.start.meetingTimestamp)–\(topic.end.meetingTimestamp)]\n\n"
-        output += renderTurns(turns.filter { $0.end >= topic.start && $0.start <= topic.end })
+        output += renderTurns(turnsByTopic[index])
+      }
+      if !unassigned.isEmpty {
+        output += "## Other\n\n"
+        output += renderTurns(unassigned)
       }
     } else {
       output += renderSegmentedTurns(turns)
@@ -29,7 +45,7 @@ enum MarkdownRenderer {
   static func renderMeeting(_ meeting: MeetingDocument) -> String {
     var output = frontmatter(meeting, artifact: "meeting-memory")
     let transcriptAvailable = meeting.transcriptDeletedAt == nil
-    output += "\n# \(meeting.title)\n\n"
+    output += "\n# \(headingTitle(meeting.title))\n\n"
     if let calendar = meeting.calendar {
       output += "## Participants\n\n"
       let participants = uniqueParticipants(calendar)
@@ -141,7 +157,29 @@ enum MarkdownRenderer {
     }
   }
 
+  /// Renders a title inline in Markdown headings: newlines would break the
+  /// heading structure, so collapse any whitespace/newline runs to one space.
+  private static func headingTitle(_ value: String) -> String {
+    value
+      .components(separatedBy: .whitespacesAndNewlines)
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+  }
+
   private static func yaml(_ value: String) -> String {
-    "\"\(value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\""
+    var escaped = value
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "\"", with: "\\\"")
+      .replacingOccurrences(of: "\n", with: "\\n")
+      .replacingOccurrences(of: "\r", with: "\\r")
+      .replacingOccurrences(of: "\t", with: "\\t")
+    // Escape any remaining C0 control characters that would corrupt the YAML.
+    escaped = escaped.unicodeScalars.map { scalar in
+      if scalar.value < 0x20 {
+        return String(format: "\\u%04X", scalar.value)
+      }
+      return String(scalar)
+    }.joined()
+    return "\"\(escaped)\""
   }
 }

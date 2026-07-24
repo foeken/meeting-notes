@@ -3,10 +3,23 @@ import AudioToolbox
 import Foundation
 
 final class MicrophoneRecorder: @unchecked Sendable {
-  var onSamples: (@Sendable ([Int16]) -> Void)?
+  var onSamples: (@Sendable ([Int16]) -> Void)? {
+    get { lock.withLock { samplesHandler } }
+    set { lock.withLock { samplesHandler = newValue } }
+  }
+
+  /// Like `onSamples`, but also delivers the WAV sample position (including
+  /// alignment padding) after these samples were written. Live transcription
+  /// can use it to keep timestamps on the capture clock across pause/resume.
+  var onSamplesAtPosition: (@Sendable ([Int16], Int) -> Void)? {
+    get { lock.withLock { positionHandler } }
+    set { lock.withLock { positionHandler = newValue } }
+  }
 
   private let engine = AVAudioEngine()
   private let lock = NSLock()
+  private var samplesHandler: (@Sendable ([Int16]) -> Void)?
+  private var positionHandler: (@Sendable ([Int16], Int) -> Void)?
   private var handle: FileHandle?
   private var byteCount = 0
   private var outputURL: URL?
@@ -18,29 +31,35 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private var preferredDeviceUID: String?
 
   func usePreferredDevice(_ uid: String?) {
-    preferredDeviceUID = uid
+    lock.withLock { preferredDeviceUID = uid }
   }
 
   func start(writingTo url: URL, clock: CaptureClock) throws {
-    handle = try WavFile.create(at: url)
-    outputURL = url
-    byteCount = 0
-    bytesSinceCheckpoint = 0
-    writeError = nil
-    alignmentClock = clock
-    needsAlignment = true
+    let created = try WavFile.create(at: url)
+    lock.withLock {
+      handle = created
+      outputURL = url
+      byteCount = 0
+      bytesSinceCheckpoint = 0
+      writeError = nil
+      alignmentClock = clock
+      needsAlignment = true
+    }
     do { try startEngine() } catch {
-      try? handle?.close()
-      handle = nil
-      outputURL = nil
+      lock.withLock {
+        try? handle?.close()
+        handle = nil
+        outputURL = nil
+        alignmentClock = nil
+      }
       throw error
     }
   }
 
   func pause() {
-    guard tapping else { return }
+    guard lock.withLock({ tapping }) else { return }
     engine.inputNode.removeTap(onBus: 0)
-    tapping = false
+    lock.withLock { tapping = false }
     engine.stop()
     lock.lock()
     if let handle {
@@ -50,14 +69,18 @@ final class MicrophoneRecorder: @unchecked Sendable {
   }
 
   func resume() throws {
-    guard handle != nil, !tapping else { return }
-    needsAlignment = true
+    let canResume = lock.withLock { () -> Bool in
+      guard handle != nil, !tapping else { return false }
+      needsAlignment = true
+      return true
+    }
+    guard canResume else { return }
     try startEngine()
   }
 
   private func startEngine() throws {
     let input = engine.inputNode
-    if let preferredDeviceUID {
+    if let preferredDeviceUID = lock.withLock({ preferredDeviceUID }) {
       guard let deviceID = MicrophoneDeviceProvider.audioDeviceID(forUID: preferredDeviceUID),
         let audioUnit = input.audioUnit
       else {
@@ -128,13 +151,17 @@ final class MicrophoneRecorder: @unchecked Sendable {
         Int16(max(-1, min(1, channel[index])) * 32767)
       }
       self.write(samples)
-      self.onSamples?(samples)
+      let (handler, positionHandler, position) = self.lock.withLock {
+        (self.samplesHandler, self.positionHandler, self.byteCount / MemoryLayout<Int16>.size)
+      }
+      handler?(samples)
+      positionHandler?(samples, position)
     }
-    tapping = true
+    lock.withLock { tapping = true }
     engine.prepare()
     do { try engine.start() } catch {
       input.removeTap(onBus: 0)
-      tapping = false
+      lock.withLock { tapping = false }
       throw error
     }
   }
@@ -164,13 +191,17 @@ final class MicrophoneRecorder: @unchecked Sendable {
     pause()
     lock.lock()
     defer { lock.unlock() }
-    if let handle { try WavFile.finalize(handle, bytes: byteCount) }
+    let finalizeHandle = handle
+    let finalizeBytes = byteCount
     let recordedError = writeError
-    handle = nil
     let result = outputURL
+    // Clear state up front so a throwing finalize cannot orphan the handle
+    // and leave the recorder wedged for the next capture.
+    handle = nil
     outputURL = nil
     alignmentClock = nil
     writeError = nil
+    if let finalizeHandle { try WavFile.finalize(finalizeHandle, bytes: finalizeBytes) }
     if let recordedError { throw recordedError }
     return result
   }
@@ -182,6 +213,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
     guard writeError == nil else { return }
     do {
       if needsAlignment, let alignmentClock {
+        // Pad-only drift correction: when a segment starts behind the shared
+        // capture clock we insert silence to catch up, but a source that runs
+        // ahead (clock skew, buffered device samples) is never trimmed. Small
+        // positive drift between mic and system tracks can therefore persist;
+        // trimming was rejected because it would drop real audio.
         let missing = max(
           0, alignmentClock.samplePosition - byteCount / MemoryLayout<Int16>.size)
         if missing > 0 {

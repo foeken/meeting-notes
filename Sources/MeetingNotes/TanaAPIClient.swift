@@ -3,6 +3,12 @@ import Foundation
 actor TanaAPIClient {
   static let shared = TanaAPIClient()
   private static let baseURL = URL(string: "http://127.0.0.1:8262")!
+  private static let searchPageSize = 1000
+  private static let searchResultCap = 20000
+
+  /// True when the most recent `enrichmentEntities` call could not retrieve
+  /// every node (result cap reached or the API ignored pagination offsets).
+  private(set) var lastEnrichmentTruncated = false
 
   struct Entity: Decodable, Equatable, Sendable {
     let id: String
@@ -42,21 +48,48 @@ actor TanaAPIClient {
     guard settings.enabled, let workspaceID = settings.workspaceID,
       !settings.selectedSupertagIDs.isEmpty
     else { return [] }
+    lastEnrichmentTruncated = false
     var names = Set<String>()
     for tagID in settings.selectedSupertagIDs.sorted() {
-      let entities: [Entity] = try await get(path: "nodes/search", queryItems: [
-        URLQueryItem(name: "query[hasType][typeId]", value: tagID),
-        URLQueryItem(name: "query[hasType][includeExtensions]", value: "true"),
-        URLQueryItem(name: "query[inWorkspace]", value: workspaceID),
-        URLQueryItem(name: "workspaceIds[0]", value: workspaceID),
-        URLQueryItem(name: "limit", value: "1000"),
-      ])
+      let entities = try await allNodes(tagID: tagID, workspaceID: workspaceID)
       for entity in entities {
         let name = entity.name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !name.isEmpty { names.insert(name) }
       }
     }
     return names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+  }
+
+  /// Fetches every node for a Supertag by paging with `limit`/`offset`. Some
+  /// server builds ignore `offset`; a repeated page is detected and treated as
+  /// the end of pagination with `lastEnrichmentTruncated` set so callers can
+  /// surface the partial result.
+  private func allNodes(tagID: String, workspaceID: String) async throws -> [Entity] {
+    var collected: [Entity] = []
+    var seenIDs = Set<String>()
+    var offset = 0
+    while collected.count < Self.searchResultCap {
+      let page: [Entity] = try await get(path: "nodes/search", queryItems: [
+        URLQueryItem(name: "query[hasType][typeId]", value: tagID),
+        URLQueryItem(name: "query[hasType][includeExtensions]", value: "true"),
+        URLQueryItem(name: "query[inWorkspace]", value: workspaceID),
+        URLQueryItem(name: "workspaceIds[0]", value: workspaceID),
+        URLQueryItem(name: "limit", value: String(Self.searchPageSize)),
+        URLQueryItem(name: "offset", value: String(offset)),
+      ])
+      let fresh = page.filter { seenIDs.insert($0.id).inserted }
+      if !page.isEmpty, fresh.isEmpty {
+        // The API returned a page we already have: offset is unsupported and
+        // anything beyond the first page is unreachable.
+        lastEnrichmentTruncated = true
+        break
+      }
+      collected.append(contentsOf: fresh)
+      if page.count < Self.searchPageSize { return collected }
+      offset += page.count
+    }
+    if collected.count >= Self.searchResultCap { lastEnrichmentTruncated = true }
+    return collected
   }
 
   private func get<T: Decodable>(

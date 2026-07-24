@@ -1,14 +1,29 @@
 import AVFoundation
 import CoreMedia
 import Foundation
+import OSLog
 import ScreenCaptureKit
 
 /// ScreenCaptureKit audio capture, adapted from Muesli's MIT-licensed recorder.
 final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
-  var onSamples: (@Sendable ([Int16]) -> Void)?
+  var onSamples: (@Sendable ([Int16]) -> Void)? {
+    get { lock.withLock { samplesHandler } }
+    set { lock.withLock { samplesHandler = newValue } }
+  }
+
+  /// Like `onSamples`, but also delivers the WAV sample position (including
+  /// alignment padding) after these samples were written. Live transcription
+  /// can use it to keep timestamps on the capture clock across pause/resume.
+  var onSamplesAtPosition: (@Sendable ([Int16], Int) -> Void)? {
+    get { lock.withLock { positionHandler } }
+    set { lock.withLock { positionHandler = newValue } }
+  }
 
   private let queue = DispatchQueue(label: "MeetingNotes.system-audio")
   private let lock = NSLock()
+  private let logger = Logger(subsystem: "app.meetingnotes.menu", category: "SystemAudioRecorder")
+  private var samplesHandler: (@Sendable ([Int16]) -> Void)?
+  private var positionHandler: (@Sendable ([Int16], Int) -> Void)?
   private var stream: SCStream?
   private var handle: FileHandle?
   private var outputURL: URL?
@@ -18,21 +33,30 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
   private var needsAlignment = false
   private var bytesSinceCheckpoint = 0
   private var writeError: Error?
+  private var reportedUnsupportedFormat = false
 
   func start(writingTo url: URL, clock: CaptureClock) async throws {
-    handle = try WavFile.create(at: url)
-    outputURL = url
-    byteCount = 0
-    bytesSinceCheckpoint = 0
-    writeError = nil
-    alignmentClock = clock
-    needsAlignment = true
+    let created = try WavFile.create(at: url)
+    lock.withLock {
+      handle = created
+      outputURL = url
+      byteCount = 0
+      bytesSinceCheckpoint = 0
+      writeError = nil
+      alignmentClock = clock
+      needsAlignment = true
+      reportedUnsupportedFormat = false
+    }
     do {
       try await startStream()
     } catch {
-      recording = false
-      try? handle?.close()
-      handle = nil
+      lock.withLock {
+        recording = false
+        try? handle?.close()
+        handle = nil
+        outputURL = nil
+        alignmentClock = nil
+      }
       throw error
     }
   }
@@ -45,8 +69,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
 
   /// Called directly from `willSleep`; it does not wait for ScreenCaptureKit.
   func suspendImmediately() {
-    recording = false
     lock.lock()
+    recording = false
     if let handle {
       do { try WavFile.checkpoint(handle, bytes: byteCount) } catch { writeError = error }
     }
@@ -54,9 +78,9 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
   }
 
   func resume() async throws {
-    guard handle != nil else { return }
+    guard lock.withLock({ handle != nil }) else { return }
     if stream != nil { await pause() }
-    needsAlignment = true
+    lock.withLock { needsAlignment = true }
     try await startStream()
   }
 
@@ -88,19 +112,23 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
     try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
     try await stream.startCapture()
     self.stream = stream
-    recording = true
+    lock.withLock { recording = true }
   }
 
   private func finalizeFile() throws -> URL? {
     lock.lock()
     defer { lock.unlock() }
-    if let handle { try WavFile.finalize(handle, bytes: byteCount) }
+    let finalizeHandle = handle
+    let finalizeBytes = byteCount
     let recordedError = writeError
-    handle = nil
     let result = outputURL
+    // Clear state up front so a throwing finalize cannot orphan the handle
+    // and leave stale write state behind for the next capture.
+    handle = nil
     outputURL = nil
     alignmentClock = nil
     writeError = nil
+    if let finalizeHandle { try WavFile.finalize(finalizeHandle, bytes: finalizeBytes) }
     if let recordedError { throw recordedError }
     return result
   }
@@ -109,7 +137,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
     _ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
     of type: SCStreamOutputType
   ) {
-    guard type == .audio, recording,
+    guard type == .audio, lock.withLock({ recording }),
       let block = CMSampleBufferGetDataBuffer(sampleBuffer),
       let description = CMSampleBufferGetFormatDescription(sampleBuffer),
       let format = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
@@ -143,16 +171,33 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         return Int16(clamping: sum / channels)
       }
     } else {
+      // Unsupported PCM layouts would otherwise disappear silently, producing
+      // an inexplicably empty system track. Surface the first occurrence.
+      let shouldReport = lock.withLock { () -> Bool in
+        guard !reportedUnsupportedFormat else { return false }
+        reportedUnsupportedFormat = true
+        return true
+      }
+      if shouldReport {
+        logger.error(
+          "Dropping system audio: unsupported format (flags \(format.mFormatFlags), bits \(format.mBitsPerChannel))"
+        )
+      }
       return
     }
     let data = samples.withUnsafeBufferPointer { Data(buffer: $0) }
     lock.lock()
-    guard writeError == nil else {
+    // The stream callback can race stop(): once finalizeFile() has cleared the
+    // handle, late buffers must not keep mutating counters or padding state.
+    guard writeError == nil, handle != nil else {
       lock.unlock()
       return
     }
     do {
       if needsAlignment, let alignmentClock {
+        // Pad-only drift correction: see MicrophoneRecorder.write — silence is
+        // inserted when this source lags the shared clock, but audio is never
+        // trimmed when a source runs ahead, so small drift can persist.
         let missing = max(
           0, alignmentClock.samplePosition - byteCount / MemoryLayout<Int16>.size)
         if missing > 0 {
@@ -172,7 +217,11 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
     } catch {
       writeError = error
     }
+    let handler = samplesHandler
+    let positionHandler = positionHandler
+    let position = byteCount / MemoryLayout<Int16>.size
     lock.unlock()
-    onSamples?(samples)
+    handler?(samples)
+    positionHandler?(samples, position)
   }
 }

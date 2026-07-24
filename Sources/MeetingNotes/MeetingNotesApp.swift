@@ -4,6 +4,10 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+  /// Single app-wide model. The @main scene reuses this instance so CLI and
+  /// UI-test modes never run a second set of live services.
+  static let sharedModel = AppModel()
+
   private var uiTestWindow: NSWindow?
   private let updaterController = SPUStandardUpdaterController(
     startingUpdater: true,
@@ -21,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       arguments.indices.contains(flag + 1)
     {
       let folder = URL(fileURLWithPath: arguments[flag + 1], isDirectory: true)
-      let model = AppModel()
+      let model = Self.sharedModel
       Task { @MainActor in
         do {
           try await model.regenerateMeetingInsights(at: folder)
@@ -36,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     if let flag = arguments.firstIndex(of: "--repair-meeting"), arguments.indices.contains(flag + 1) {
       let folder = URL(fileURLWithPath: arguments[flag + 1], isDirectory: true)
-      let model = AppModel()
+      let model = Self.sharedModel
       Task { @MainActor in
         do {
           try await model.repairCompletedMeeting(at: folder)
@@ -50,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     guard ProcessInfo.processInfo.arguments.contains("--ui-test") else { return }
     NSApp.setActivationPolicy(.regular)
-    let model = AppModel()
+    let model = Self.sharedModel
     if ProcessInfo.processInfo.arguments.contains("--ui-test-paused") {
       model.state = .paused
       model.elapsed = 3_725
@@ -94,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let window = NSWindow(
       contentRect: NSRect(
         x: 0, y: 0,
-        width: showingSettings ? 860 : 350,
+        width: showingSettings ? 860 : 390,
         height: showingSettings ? 640 : 460),
       styleMask: showingSettings
         ? [.titled, .closable, .miniaturizable, .resizable] : [.titled, .closable],
@@ -116,20 +120,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct MeetingNotesApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-  @State private var model = AppModel()
+  @State private var model = AppDelegate.sharedModel
 
   var body: some Scene {
     MenuBarExtra {
       MenuBarView(model: model)
     } label: {
       Image(systemName: menuBarIcon)
+        .accessibilityLabel(menuBarAccessibilityLabel)
     }
     .menuBarExtraStyle(.window)
 
     Settings {
       SettingsView(model: model)
     }
-    .defaultSize(width: 760, height: 540)
+    .defaultSize(width: 780, height: 560)
     .windowResizability(.contentMinSize)
   }
 
@@ -141,6 +146,17 @@ struct MeetingNotesApp: App {
     case .starting: "ellipsis"
     case .failed: "exclamationmark.triangle.fill"
     case .idle: "waveform"
+    }
+  }
+
+  private var menuBarAccessibilityLabel: String {
+    switch model.state {
+    case .recording: "Meeting Notes, recording"
+    case .paused: "Meeting Notes, paused"
+    case .processing: "Meeting Notes, processing"
+    case .starting: "Meeting Notes, starting"
+    case .failed: "Meeting Notes, needs attention"
+    case .idle: "Meeting Notes, ready"
     }
   }
 }

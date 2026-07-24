@@ -16,6 +16,7 @@ final class TanaOAuthService: NSObject, ASWebAuthenticationPresentationContextPr
     case invalidCallback
     case stateMismatch
     case tokenExchangeFailed(String)
+    case keychainFailed(OSStatus)
 
     var errorDescription: String? {
       switch self {
@@ -27,6 +28,8 @@ final class TanaOAuthService: NSObject, ASWebAuthenticationPresentationContextPr
       case .stateMismatch: "Tana sign-in could not be verified. Please try again."
       case .tokenExchangeFailed(let detail):
         detail.isEmpty ? "Tana sign-in failed." : "Tana sign-in failed: \(detail)"
+      case .keychainFailed(let status):
+        "Tana sign-in could not be saved to the Keychain (error \(status))."
       }
     }
   }
@@ -113,7 +116,7 @@ final class TanaOAuthService: NSObject, ASWebAuthenticationPresentationContextPr
         "code_verifier": verifier,
         "resource": resource,
       ])
-    saveTokens(response)
+    try saveTokens(response)
   }
 
   func signOut() {
@@ -140,7 +143,7 @@ final class TanaOAuthService: NSObject, ASWebAuthenticationPresentationContextPr
           "client_id": clientID,
           "resource": resource,
         ])
-      saveTokens(response, preservingRefreshToken: refreshToken)
+      try saveTokens(response, preservingRefreshToken: refreshToken)
       return response.accessToken
     }
     return stored.accessToken
@@ -224,22 +227,28 @@ final class TanaOAuthService: NSObject, ASWebAuthenticationPresentationContextPr
     return token
   }
 
-  private func saveTokens(_ response: TokenResponse, preservingRefreshToken: String? = nil) {
+  private func saveTokens(
+    _ response: TokenResponse, preservingRefreshToken: String? = nil
+  ) throws {
     let stored = StoredTokens(
       accessToken: response.accessToken,
       refreshToken: response.refreshToken ?? preservingRefreshToken,
       expiresAt: response.expiresIn.map { Date().addingTimeInterval($0) })
-    guard let data = try? JSONEncoder().encode(stored) else { return }
+    let data = try JSONEncoder().encode(stored)
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: keychainService,
       kSecAttrAccount as String: "oauth",
     ]
-    SecItemDelete(query as CFDictionary)
+    let deleteStatus = SecItemDelete(query as CFDictionary)
+    guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+      throw AuthError.keychainFailed(deleteStatus)
+    }
     var item = query
     item[kSecValueData as String] = data
     item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-    SecItemAdd(item as CFDictionary, nil)
+    let addStatus = SecItemAdd(item as CFDictionary, nil)
+    guard addStatus == errSecSuccess else { throw AuthError.keychainFailed(addStatus) }
   }
 
   private func loadTokens() -> StoredTokens? {

@@ -12,9 +12,17 @@ import Testing
 
 @Test func fillerWordFilterRemovesPausesWithoutDamagingWords() {
   #expect(FillerWordFilter.apply("So uh I was thinking um about this") == "So I was thinking about this")
-  #expect(FillerWordFilter.apply("Uh, er, the answer is yes") == "The answer is yes")
+  #expect(FillerWordFilter.apply("Uh, um, the answer is yes") == "The answer is yes")
   #expect(FillerWordFilter.apply("The umbrella is here") == "The umbrella is here")
   #expect(FillerWordFilter.apply("Her name is Uma") == "Her name is Uma")
+}
+
+@Test func fillerWordFilterKeepsAmbiguousDutchTokens() {
+  // "er" and "mm" are real Dutch words; the language-blind filter must not
+  // strip them even though English treats them as fillers.
+  #expect(FillerWordFilter.apply("Er is nog koffie") == "Er is nog koffie")
+  #expect(FillerWordFilter.apply("Hij is er al, mm 80 procent zeker") == "Hij is er al, mm 80 procent zeker")
+  #expect(FillerWordFilter.apply("So err I think hmm we wait") == "So I think we wait")
 }
 
 @Test func fillerWordFilterHandlesCommonDisfluencyPhrasesConservatively() {
@@ -75,13 +83,8 @@ import Testing
   #expect(customPrompt.contains("from /Users/test/Meeting Notes"))
   #expect(!customPrompt.contains("{{meeting_date}}"))
 
-  let url = try #require(CodexThreadService.newThreadURL(for: context))
-  let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
-  #expect(url.scheme == "codex")
-  #expect(url.host == "threads")
-  #expect(url.path == "/new")
-  #expect(components.queryItems?.first(where: { $0.name == "path" })?.value == "/Users/test/Meeting Notes")
-  #expect(components.queryItems?.first(where: { $0.name == "prompt" })?.value == prompt)
+  let threadURL = try #require(CodexThreadService.threadURL("thread-123"))
+  #expect(threadURL.absoluteString == "codex://threads/thread-123")
 
   let startParams = CodexThreadService.threadStartParams(for: context)
   #expect(startParams["cwd"] as? String == "/Users/test/Meeting Notes")
@@ -149,6 +152,21 @@ import Testing
     cameraActive: true, microphoneActive: true, apps: [activeChrome]) == "Chrome")
 }
 
+@Test func browserMeetingDetectionRecognizesOtherActiveBrowsers() {
+  for (identifier, name) in [
+    ("com.apple.Safari", "Safari"),
+    ("company.thebrowser.Browser", "Arc"),
+    ("com.microsoft.edgemac", "Edge"),
+  ] {
+    let active = MeetingAppDetector.RunningApp(bundleIdentifier: identifier, isActive: true)
+    let background = MeetingAppDetector.RunningApp(bundleIdentifier: identifier, isActive: false)
+    #expect(MeetingAppDetector.detectedApp(
+      cameraActive: true, microphoneActive: true, apps: [active]) == name)
+    #expect(MeetingAppDetector.detectedApp(
+      cameraActive: true, microphoneActive: true, apps: [background]) == nil)
+  }
+}
+
 @MainActor
 @Test func meetingAutoStopWaitsForGracePeriodAndCancelsWhenDetectionReturns() async throws {
   let scheduler = MeetingAutoStopScheduler()
@@ -204,7 +222,7 @@ import Testing
       TranscriptTurn(start: 305, end: 307, speaker: "Speaker 1", text: "Ship it.", source: .system)
     ]
   )
-  let output = MarkdownRenderer.render(meeting)
+  let output = MarkdownRenderer.renderLive(meeting)
   #expect(output.contains("# Roadmap & planning"))
   #expect(output.contains("**[00:05:05] Speaker 1:** Ship it."))
   #expect(output.contains("status: recording"))
@@ -215,12 +233,89 @@ import Testing
   #expect("Penny - Tags, Teams & Insights".filenameSafe == "penny-tags-teams-insights")
 }
 
+@Test func topicSegmentedTranscriptEmitsEveryTurnExactlyOnce() {
+  // Topics leave gaps (0–10 and 30–40 covered; 10–30 and >40 uncovered) and the
+  // straddling turn at 8–12 overlaps the first topic boundary.
+  let insights = MeetingInsights(
+    summary: "Summary",
+    topics: [
+      TopicInsight(title: "Kickoff", summary: "Start", start: 0, end: 10),
+      TopicInsight(title: "Planning", summary: "Middle", start: 30, end: 40),
+    ],
+    decisions: [], actionItems: [], openQuestions: [], keyStatements: [],
+    generatedAt: Date(timeIntervalSince1970: 0), generator: "test"
+  )
+  let meeting = MeetingDocument(
+    id: UUID(), title: "Coverage", startedAt: Date(timeIntervalSince1970: 0),
+    status: .complete,
+    transcript: [
+      TranscriptTurn(start: 2, end: 4, speaker: "A", text: "Inside first topic.", source: .system),
+      TranscriptTurn(start: 8, end: 12, speaker: "B", text: "Straddles the boundary.", source: .system),
+      TranscriptTurn(start: 18, end: 20, speaker: "C", text: "In the gap between topics.", source: .system),
+      TranscriptTurn(start: 32, end: 34, speaker: "D", text: "Inside second topic.", source: .system),
+      TranscriptTurn(start: 50, end: 52, speaker: "E", text: "After the last topic.", source: .system),
+    ],
+    insights: insights
+  )
+  let output = MarkdownRenderer.renderTranscript(meeting)
+
+  // Every turn appears exactly once, including gap and post-topic turns.
+  for text in [
+    "Inside first topic.", "Straddles the boundary.", "In the gap between topics.",
+    "Inside second topic.", "After the last topic.",
+  ] {
+    #expect(output.components(separatedBy: text).count == 2, "expected \(text) exactly once")
+  }
+
+  // Turns outside all topics land in a trailing "Other" section.
+  #expect(output.contains("## Other"))
+  let other = output.components(separatedBy: "## Other").last ?? ""
+  #expect(other.contains("In the gap between topics."))
+  #expect(other.contains("After the last topic."))
+
+  // The straddling turn is assigned to the first overlapping topic.
+  let kickoff = output.components(separatedBy: "## Kickoff").last?
+    .components(separatedBy: "## ").first ?? ""
+  #expect(kickoff.contains("Straddles the boundary."))
+}
+
+@Test func topicSegmentedTranscriptOmitsEmptyOtherSection() {
+  let insights = MeetingInsights(
+    summary: "Summary",
+    topics: [TopicInsight(title: "Everything", summary: "All", start: 0, end: 100)],
+    decisions: [], actionItems: [], openQuestions: [], keyStatements: [],
+    generatedAt: Date(timeIntervalSince1970: 0), generator: "test"
+  )
+  let meeting = MeetingDocument(
+    id: UUID(), title: "No leftovers", startedAt: Date(timeIntervalSince1970: 0),
+    status: .complete,
+    transcript: [
+      TranscriptTurn(start: 5, end: 6, speaker: "A", text: "Covered.", source: .system)
+    ],
+    insights: insights
+  )
+  let output = MarkdownRenderer.renderTranscript(meeting)
+  #expect(!output.contains("## Other"))
+  #expect(output.contains("Covered."))
+}
+
+@Test func yamlFrontmatterEscapesNewlinesInTitle() {
+  let meeting = MeetingDocument(
+    id: UUID(), title: "Line one\nLine two", startedAt: Date(timeIntervalSince1970: 0),
+    status: .recording, transcript: []
+  )
+  let output = MarkdownRenderer.renderLive(meeting)
+  #expect(output.contains("title: \"Line one\\nLine two\""))
+  // The heading collapses the newline instead of breaking Markdown structure.
+  #expect(output.contains("# Line one Line two — Live transcript"))
+}
+
 @Test func finalStatusRendersAsComplete() {
   let meeting = MeetingDocument(
     id: UUID(), title: "Done", startedAt: Date(timeIntervalSince1970: 0),
     endedAt: Date(timeIntervalSince1970: 60), status: .complete, transcript: []
   )
-  #expect(MarkdownRenderer.render(meeting).contains("status: complete"))
+  #expect(MarkdownRenderer.renderLive(meeting).contains("status: complete"))
 }
 
 @Test func successfulFinalizationReplacesLiveFile() async throws {
@@ -745,6 +840,30 @@ import Testing
   defer { defaults.removePersistentDomain(forName: suite) }
   VocabularySettingsStore.save(VocabularySettingsStore.formatted(entries), to: defaults)
   #expect(VocabularySettingsStore.load(from: defaults) == entries)
+}
+
+@Test func vocabularyCorrectorHandlesPunctuatedAliasesAndCacheInvalidation() {
+  let previous = VocabularySettingsStore.loadDraft()
+  defer {
+    VocabularySettingsStore.save(previous)
+    VocabularyTextCorrector.invalidate()
+  }
+
+  VocabularySettingsStore.save("Acme | ack me\n.NET | dot net, .net framework")
+  VocabularyTextCorrector.invalidate()
+  #expect(VocabularyTextCorrector.apply(to: "We use ack me daily") == "We use Acme daily")
+  // Aliases starting with a non-word character must still match: a plain \b
+  // boundary silently fails for ".net framework".
+  #expect(VocabularyTextCorrector.apply(to: "Built on .net framework today") == "Built on .NET today")
+  // Whole-word semantics remain for ordinary aliases.
+  #expect(VocabularyTextCorrector.apply(to: "backpack meets us") == "backpack meets us")
+  #expect(VocabularyTextCorrector.apply(to: "Jack meets us") == "Jack meets us")
+
+  // The compiled patterns are cached until invalidated.
+  VocabularySettingsStore.save("Acme | jack")
+  #expect(VocabularyTextCorrector.apply(to: "ask jack") == "ask jack")
+  VocabularyTextCorrector.invalidate()
+  #expect(VocabularyTextCorrector.apply(to: "ask jack") == "ask Acme")
 }
 
 @Test func onlyGeneratedMeetingPathsAreAcceptedForRemoteDeletion() {

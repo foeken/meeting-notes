@@ -10,40 +10,49 @@ final class CalendarService {
     let metadata: CalendarMetadata
   }
 
-  func currentMeeting() async -> Suggestion? {
-    do {
-      let status = EKEventStore.authorizationStatus(for: .event)
-      if status == .notDetermined {
-        guard try await store.requestFullAccessToEvents() else { return nil }
-      } else if status != .fullAccess {
-        return nil
-      }
+  /// Explicitly requests calendar access. Call from a user-initiated UI path
+  /// (for example a Settings button or first-run flow), never implicitly.
+  @discardableResult
+  func requestAccess() async -> Bool {
+    let status = EKEventStore.authorizationStatus(for: .event)
+    switch status {
+    case .fullAccess:
+      return true
+    case .notDetermined:
+      return (try? await store.requestFullAccessToEvents()) ?? false
+    default:
+      return false
+    }
+  }
 
-      let now = Date()
-      let predicate = store.predicateForEvents(
-        withStart: now.addingTimeInterval(-30 * 60),
-        end: now.addingTimeInterval(30 * 60), calendars: nil
-      )
-      let candidates = store.events(matching: predicate)
-        .filter { !$0.isAllDay && $0.endDate >= now.addingTimeInterval(-5 * 60) }
-        .filter { !Self.shouldIgnore(title: $0.title, ignoredWords: IgnoredMeetingTitlesStore.load()) }
-        .sorted {
-          abs($0.startDate.timeIntervalSince(now)) < abs($1.startDate.timeIntervalSince(now))
-        }
-      guard let event = candidates.first else { return nil }
-      let participants = (event.attendees ?? []).map(Self.participant)
-      let metadata = CalendarMetadata(
-        eventIdentifier: event.eventIdentifier,
-        calendarTitle: event.calendar.title,
-        scheduledStart: event.startDate,
-        scheduledEnd: event.endDate,
-        organizer: event.organizer.map(Self.participant),
-        participants: participants,
-        location: event.location,
-        meetingURL: event.url
-      )
-      return Suggestion(title: event.title ?? "Meeting", metadata: metadata)
-    } catch { return nil }
+  func currentMeeting() async -> Suggestion? {
+    // This read path runs from background refreshes; it must never trigger the
+    // system permission prompt. The UI calls requestAccess() explicitly.
+    guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return nil }
+    let now = Date()
+    let predicate = store.predicateForEvents(
+      withStart: now.addingTimeInterval(-30 * 60),
+      end: now.addingTimeInterval(30 * 60), calendars: nil
+    )
+    let candidates = store.events(matching: predicate)
+      .filter { !$0.isAllDay && $0.endDate >= now.addingTimeInterval(-5 * 60) }
+      .filter { !Self.shouldIgnore(title: $0.title, ignoredWords: IgnoredMeetingTitlesStore.load()) }
+      .sorted {
+        abs($0.startDate.timeIntervalSince(now)) < abs($1.startDate.timeIntervalSince(now))
+      }
+    guard let event = candidates.first else { return nil }
+    let participants = (event.attendees ?? []).map(Self.participant)
+    let metadata = CalendarMetadata(
+      eventIdentifier: event.eventIdentifier,
+      calendarTitle: event.calendar.title,
+      scheduledStart: event.startDate,
+      scheduledEnd: event.endDate,
+      organizer: event.organizer.map(Self.participant),
+      participants: participants,
+      location: event.location,
+      meetingURL: event.url
+    )
+    return Suggestion(title: event.title ?? "Meeting", metadata: metadata)
   }
 
   nonisolated static func shouldIgnore(

@@ -33,6 +33,10 @@ enum WavFile {
   /// Distinguishes a real captured signal from a correctly-sized silent WAV.
   /// ScreenCaptureKit writes silence for the full meeting when no system audio
   /// is playing, so file size alone cannot establish useful captured speech.
+  ///
+  /// Detection is RMS-windowed rather than a raw per-sample amplitude count so
+  /// quiet-but-valid recordings (soft speakers, low input gain) are kept while
+  /// true silence and DC-offset noise floors are still rejected.
   static func hasMeaningfulSignal(at url: URL) -> Bool {
     guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), data.count > 44 else {
       return false
@@ -41,13 +45,30 @@ enum WavFile {
       let allSamples = bytes.bindMemory(to: Int16.self)
       guard allSamples.count > 22 else { return false }
       let samples = allSamples.dropFirst(22)
-      // Require roughly 0.1% of the recording to contain a signal above
-      // low-level capture noise, with a 100 ms floor for short recordings.
-      let requiredActiveSamples = max(1_600, samples.count / 1_000)
-      var activeSamples = 0
-      for sample in samples where abs(Int(sample)) >= 96 {
-        activeSamples += 1
-        if activeSamples >= requiredActiveSamples { return true }
+      // 100 ms analysis windows; a window counts as active when its RMS rises
+      // above a low noise floor. Require roughly 200 ms of active audio (one
+      // window for very short files), scaled slightly for long recordings.
+      let windowSize = Int(sampleRate) / 10
+      let minimumRMS = 48.0
+      let totalWindows = max(1, samples.count / windowSize)
+      let requiredActiveWindows = max(min(2, totalWindows), totalWindows / 500)
+      var activeWindows = 0
+      var index = samples.startIndex
+      while index < samples.endIndex {
+        let end = min(index + windowSize, samples.endIndex)
+        let count = end - index
+        if count >= windowSize / 2 {
+          var energy = 0.0
+          for sampleIndex in index..<end {
+            let value = Double(samples[sampleIndex])
+            energy += value * value
+          }
+          if energy / Double(count) >= minimumRMS * minimumRMS {
+            activeWindows += 1
+            if activeWindows >= requiredActiveWindows { return true }
+          }
+        }
+        index = end
       }
       return false
     }

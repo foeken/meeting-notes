@@ -78,6 +78,31 @@ actor RemoteSyncService {
     lastError = nil
   }
 
+  /// Re-validates the active configuration before any ssh/rsync invocation so
+  /// unvalidated values (empty or option-like host/path, stale settings) can
+  /// never reach a command line.
+  private func validatedRemoteConfiguration() throws -> Configuration {
+    let config = configuration
+    if let error = config.validationError {
+      throw NSError(
+        domain: "RemoteSync", code: 6,
+        userInfo: [NSLocalizedDescriptionKey: "Archive settings are invalid: \(error)"])
+    }
+    if config.remoteSyncEnabled {
+      let host = config.host.trimmingCharacters(in: .whitespacesAndNewlines)
+      let path = config.path.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !host.isEmpty, !host.hasPrefix("-"), !path.isEmpty, !path.hasPrefix("-") else {
+        throw NSError(
+          domain: "RemoteSync", code: 6,
+          userInfo: [
+            NSLocalizedDescriptionKey:
+              "Archive settings are invalid: the SSH host and remote path must not be empty or start with “-”."
+          ])
+      }
+    }
+    return config
+  }
+
   func enqueue(folder: URL, runHookAfterSync: Bool = false) {
     guard configuration.enabled else { return }
     var options = pending[folder] ?? SyncOptions()
@@ -254,7 +279,7 @@ actor RemoteSyncService {
   }
 
   private func syncPointer(_ file: URL) async throws {
-    let config = configuration
+    let config = try validatedRemoteConfiguration()
     let archive = try localArchiveURL(for: config)
     try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
     try await run(
@@ -288,9 +313,20 @@ actor RemoteSyncService {
     case .disabled:
       return
     case .remote:
+      // Stale hook settings can point at a remote that is no longer configured.
+      // Treat that as a no-op instead of handing ssh an empty or unwanted host.
+      let host = config.host.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard config.remoteSyncEnabled, !host.isEmpty else {
+        lastError = "Post-meeting hook skipped: remote sync is not configured."
+        return
+      }
+      guard !host.hasPrefix("-"), !config.path.hasPrefix("-") else {
+        lastError = "Post-meeting hook skipped: the SSH host or path is invalid."
+        return
+      }
       try await run(
         "/usr/bin/ssh",
-        strictSSHArguments(host: config.host) + ["cd -- \(config.path) && \(command)"])
+        strictSSHArguments(host: host) + ["cd -- \(config.path) && \(command)"])
     case .local:
       let archive = (config.localPath as NSString).expandingTildeInPath
       try await run("/bin/zsh", ["-lc", "cd -- \(Self.shellQuote(archive)) && \(command)"])
@@ -316,7 +352,7 @@ actor RemoteSyncService {
   }
 
   private func sync(folder: URL) async throws {
-    let config = configuration
+    let config = try validatedRemoteConfiguration()
     let tail = folder.pathComponents.suffix(4).joined(separator: "/")
     let localTarget = try localArchiveURL(for: config).appending(
       path: tail, directoryHint: .isDirectory)
@@ -366,7 +402,7 @@ actor RemoteSyncService {
         domain: "RemoteSync", code: 4,
         userInfo: [NSLocalizedDescriptionKey: "Meeting folder path is invalid"])
     }
-    let config = configuration
+    let config = try validatedRemoteConfiguration()
     let empty = FileManager.default.temporaryDirectory.appending(
       path: "MeetingNotesDelete-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
@@ -435,8 +471,24 @@ actor RemoteSyncService {
       if let environment { process.environment = environment }
       process.standardOutput = FileHandle.nullDevice
       process.standardError = errorPipe
+      // Drain stderr while the process runs; waiting until termination can
+      // deadlock once the child fills the 64KB pipe buffer.
+      let drained = DrainedData()
+      errorPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        if chunk.isEmpty {
+          handle.readabilityHandler = nil
+        } else {
+          drained.append(chunk)
+        }
+      }
       process.terminationHandler = { process in
-        let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        errorPipe.fileHandleForReading.readabilityHandler = nil
+        // Collect any remainder that arrived between the last callback and exit.
+        if let rest = try? errorPipe.fileHandleForReading.readToEnd() {
+          drained.append(rest)
+        }
+        let data = drained.value
         if process.terminationStatus == 0 {
           continuation.resume()
         } else {
@@ -453,6 +505,25 @@ actor RemoteSyncService {
       }
       do { try process.run() } catch { continuation.resume(throwing: error) }
     }
+  }
+}
+
+/// Accumulates pipe output across the readability handler's callback queue and
+/// the termination handler without data races.
+private final class DrainedData: @unchecked Sendable {
+  private let lock = NSLock()
+  private var data = Data()
+
+  func append(_ chunk: Data) {
+    lock.lock()
+    data.append(chunk)
+    lock.unlock()
+  }
+
+  var value: Data {
+    lock.lock()
+    defer { lock.unlock() }
+    return data
   }
 }
 

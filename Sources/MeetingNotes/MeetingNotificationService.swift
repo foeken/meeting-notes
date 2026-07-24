@@ -34,8 +34,14 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
   }
 
   func showDetectedMeeting(app: String) {
-    rearmTask?.cancel()
-    rearmTask = nil
+    if let rearmTask {
+      // A pending re-arm means the previous meeting ended and the cooldown was
+      // running. A new meeting cancels the cooldown but must still notify, so
+      // treat the cancelled re-arm as if it had already fired.
+      rearmTask.cancel()
+      self.rearmTask = nil
+      notificationArmed = true
+    }
     guard notificationArmed else { return }
     notificationArmed = false
 

@@ -15,11 +15,22 @@ final class AppModel {
     case failed(String)
   }
 
+  enum StatusSeverity: Equatable {
+    case info
+    case warning
+    case error
+  }
+
   var state: State = .idle
   var title = ""
   var elapsed: TimeInterval = 0
   var recentTurns: [TranscriptTurn] = []
-  var statusText = "Ready"
+  var statusText = "Ready" {
+    didSet { statusSeverity = .info }
+  }
+  /// Set immediately after `statusText` at call sites that report a problem;
+  /// every plain `statusText` assignment resets this to `.info`.
+  var statusSeverity: StatusSeverity = .info
   var chatGPTAuthenticated = false
   var chatGPTAuthInProgress = false
   var chatGPTAuthStatusText = "Checking sign-in…"
@@ -92,7 +103,11 @@ final class AppModel {
     || ProcessInfo.processInfo.arguments.contains("--regenerate-insights")
   private var timer: Timer?
   private var startedAt: Date?
+  private var lastHeartbeatElapsed: TimeInterval = 0
   private var pausedBySleep = false
+  private var liveFeedTask: Task<Void, Never>?
+  private var liveFeedContinuation:
+    AsyncStream<(samples: [Int16], source: TranscriptTurn.Source, wavPosition: Int)>.Continuation?
   private var workspaceObservers: [NSObjectProtocol] = []
   private var calendarMetadata: CalendarMetadata?
   private var retentionMaintenanceTask: Task<Void, Never>?
@@ -713,7 +728,7 @@ final class AppModel {
     Task {
       defer { codexLaunchingCurrentMeeting = false }
       guard let document = await store.current(), let folder = await store.currentFolder() else {
-        statusText = "Could not find the current meeting folder."
+        reportError("Could not find the current meeting folder.")
         return
       }
       await openMeetingInCodex(document: document, folder: folder)
@@ -729,7 +744,7 @@ final class AppModel {
         let (document, folder) = try await store.completedMeeting(id: meeting.id)
         await openMeetingInCodex(document: document, folder: folder)
       } catch {
-        statusText = "Could not open the meeting in Codex: \(error.localizedDescription)"
+        reportError("Could not open the meeting in Codex: \(error.localizedDescription)")
       }
     }
   }
@@ -750,7 +765,7 @@ final class AppModel {
     let spoolRoot = root.standardizedFileURL.path + "/"
     let spoolFolder = folder.standardizedFileURL.path
     guard spoolFolder.hasPrefix(spoolRoot) else {
-      statusText = "Could not locate the meeting inside the local archive."
+      reportError("Could not locate the meeting inside the local archive.")
       return
     }
     let relativeMeetingPath = String(spoolFolder.dropFirst(spoolRoot.count))
@@ -777,7 +792,7 @@ final class AppModel {
       await remoteSync.flush()
       showCodexProjectHintIfNeeded(projectFolder: projectFolder)
     } catch {
-      statusText = "Could not create the Codex task: \(error.localizedDescription)"
+      reportError("Could not create the Codex task: \(error.localizedDescription)")
     }
   }
 
@@ -819,7 +834,7 @@ final class AppModel {
       await store.enqueueCompleteArchive()
       await remoteSync.flush()
       if let error = await remoteSync.lastError {
-        statusText = "Audio setting saved; archive update pending: \(error)"
+        reportWarning("Audio setting saved; archive update pending: \(error)")
       }
     }
   }
@@ -933,7 +948,7 @@ final class AppModel {
     enrichmentRetryAvailable = lastError != nil
     if reportStatus {
       if let lastError {
-        statusText = "Some meeting notes could not be created: \(lastError.localizedDescription)"
+        reportError("Some meeting notes could not be created: \(lastError.localizedDescription)")
       } else {
         showTransientStatus("Delayed meeting notes created and synced")
       }
@@ -1053,7 +1068,7 @@ final class AppModel {
       showTransientStatus("Deleted from Laptop and \(archiveDisplayName)")
     } catch {
       state = .idle
-      statusText = "Delete failed; local copy retained: \(error.localizedDescription)"
+      reportError("Delete failed; local copy retained: \(error.localizedDescription)")
     }
   }
 
@@ -1078,12 +1093,12 @@ final class AppModel {
         let (_, folder) = try await store.completedMeeting(id: meeting.id)
         let file = folder.appending(path: fileName)
         guard FileManager.default.fileExists(atPath: file.path) else {
-          statusText = "\(fileName) does not exist for this meeting."
+          reportError("\(fileName) does not exist for this meeting.")
           return
         }
         NSWorkspace.shared.open(file)
       } catch {
-        statusText = "Could not open \(fileName): \(error.localizedDescription)"
+        reportError("Could not open \(fileName): \(error.localizedDescription)")
       }
     }
   }
@@ -1117,13 +1132,13 @@ final class AppModel {
       await refreshMeetingDay()
       state = .idle
       if let syncError = await remoteSync.lastError {
-        statusText = "Renamed locally; archive update pending: \(syncError)"
+        reportWarning("Renamed locally; archive update pending: \(syncError)")
       } else {
         showTransientStatus("Renamed in the archive")
       }
     } catch {
       state = .idle
-      statusText = "Rename failed: \(error.localizedDescription)"
+      reportError("Rename failed: \(error.localizedDescription)")
     }
   }
 
@@ -1155,13 +1170,13 @@ final class AppModel {
       await refreshMeetingDay()
       state = .idle
       if let syncError = await remoteSync.lastError {
-        statusText = "Summary recreated locally; archive update pending: \(syncError)"
+        reportWarning("Summary recreated locally; archive update pending: \(syncError)")
       } else {
         showTransientStatus("Summary recreated and synced")
       }
     } catch {
       state = .idle
-      statusText = "Could not recreate the summary: \(error.localizedDescription)"
+      reportError("Could not recreate the summary: \(error.localizedDescription)")
     }
   }
 
@@ -1214,6 +1229,15 @@ final class AppModel {
           domain: "MeetingNotes", code: 1,
           userInfo: [NSLocalizedDescriptionKey: "Microphone access was denied"])
       }
+      // Starting a recording is an explicit user action, so this is the one
+      // place calendar access may prompt. Background refreshes never do.
+      if await calendar.requestAccess(), calendarMetadata == nil,
+        title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        let suggestion = await calendar.currentMeeting()
+      {
+        title = suggestion.title
+        calendarMetadata = suggestion.metadata
+      }
       let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
       let startedDocument = try await store.begin(
         title: cleanTitle.isEmpty ? "Meeting" : cleanTitle, calendar: calendarMetadata)
@@ -1231,12 +1255,27 @@ final class AppModel {
           }
         }
       }
-      microphone.onSamples = { [live] samples in
-        Task { await live.append(samples, source: .microphone, sessionID: liveSessionID) }
+      // A single FIFO stream per capture keeps chunks in delivery order; one
+      // unstructured Task per callback could reach the ASR actor out of order.
+      let (liveFeed, liveFeedContinuation) = AsyncStream.makeStream(
+        of: (samples: [Int16], source: TranscriptTurn.Source, wavPosition: Int).self,
+        bufferingPolicy: .unbounded
+      )
+      liveFeedTask?.cancel()
+      liveFeedTask = Task { [live] in
+        for await chunk in liveFeed {
+          await live.append(
+            chunk.samples, source: chunk.source, sessionID: liveSessionID,
+            wavPosition: chunk.wavPosition)
+        }
       }
-      systemAudio.onSamples = { [live] samples in
-        Task { await live.append(samples, source: .system, sessionID: liveSessionID) }
+      microphone.onSamplesAtPosition = { samples, position in
+        liveFeedContinuation.yield((samples, .microphone, position))
       }
+      systemAudio.onSamplesAtPosition = { samples, position in
+        liveFeedContinuation.yield((samples, .system, position))
+      }
+      self.liveFeedContinuation = liveFeedContinuation
       captureClock.start()
       microphone.usePreferredDevice(MicrophoneSettingsStore.preferredDeviceUID())
       try microphone.start(writingTo: microphoneURL, clock: captureClock)
@@ -1256,8 +1295,7 @@ final class AppModel {
     } catch {
       _ = try? microphone.stop()
       _ = try? await systemAudio.stop()
-      microphone.onSamples = nil
-      systemAudio.onSamples = nil
+      stopLiveFeed()
       await live.finish()
       captureClock.reset()
       recordingWakeLock.release()
@@ -1265,7 +1303,7 @@ final class AppModel {
       recordingMeetingApp = nil
       activeRecordingMeetingID = nil
       state = .failed(error.localizedDescription)
-      statusText = error.localizedDescription
+      reportError(error.localizedDescription)
       try? await store.setStatus(.failed)
     }
   }
@@ -1291,7 +1329,10 @@ final class AppModel {
     statusText = "Resuming…"
     do {
       captureClock.resume()
-      try microphone.resume()
+      do { try microphone.resume() } catch {
+        _ = captureClock.pause()
+        throw error
+      }
       do { try await systemAudio.resume() } catch {
         _ = captureClock.pause()
         microphone.pause()
@@ -1305,7 +1346,7 @@ final class AppModel {
       statusText = "Recording · Mac stays awake"
     } catch {
       state = .paused
-      statusText = "Resume failed: \(error.localizedDescription)"
+      reportError("Resume failed: \(error.localizedDescription)")
     }
   }
 
@@ -1333,11 +1374,13 @@ final class AppModel {
 
   private func startTimer() {
     timer?.invalidate()
+    lastHeartbeatElapsed = elapsed
     timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in
         guard let self else { return }
         self.elapsed = self.captureClock.elapsed
-        if Int(self.elapsed).isMultiple(of: 15) {
+        if self.elapsed - self.lastHeartbeatElapsed >= 15 {
+          self.lastHeartbeatElapsed = self.elapsed
           try? await self.store.heartbeat(captureState: "recording")
         }
       }
@@ -1354,11 +1397,17 @@ final class AppModel {
     timer = nil
     pausedBySleep = false
     do {
-      guard let microphoneURL = try microphone.stop(),
-        let systemURL = try await systemAudio.stop()
+      // Stop both recorders even when one of them throws, so a microphone
+      // failure can never leak a live system-audio stream (or vice versa).
+      let microphoneResult = Result { try microphone.stop() }
+      let systemResult: Result<URL?, Error>
+      do { systemResult = .success(try await systemAudio.stop()) } catch {
+        systemResult = .failure(error)
+      }
+      guard let microphoneURL = try microphoneResult.get(),
+        let systemURL = try systemResult.get()
       else { throw CocoaError(.fileNoSuchFile) }
-      microphone.onSamples = nil
-      systemAudio.onSamples = nil
+      stopLiveFeed()
       await live.finish()
       let stoppedMeeting = try await store.prepareForFinalization()
       activeRecordingMeetingID = nil
@@ -1382,7 +1431,7 @@ final class AppModel {
     } catch {
       try? await store.setStatus(.failed)
       state = .failed(error.localizedDescription)
-      statusText = error.localizedDescription
+      reportError(error.localizedDescription)
     }
   }
 
@@ -1447,7 +1496,7 @@ final class AppModel {
       await refreshRecoverableMeetingAvailability()
       await refreshMeetingDay()
       guard state == .idle else { return }
-      statusText = "Finalization retained: \(error.localizedDescription)"
+      reportError("Finalization retained: \(error.localizedDescription)")
       return
     }
 
@@ -1468,11 +1517,11 @@ final class AppModel {
     await refreshMeetingDay()
     guard state == .idle else { return }
     if let cleanupWarning {
-      statusText = "Meeting saved; audio cleanup pending: \(cleanupWarning)"
+      reportWarning("Meeting saved; audio cleanup pending: \(cleanupWarning)")
     } else if let syncError = await remoteSync.lastError {
-      statusText = "Saved locally; remote sync pending: \(syncError)"
+      reportWarning("Saved locally; remote sync pending: \(syncError)")
     } else if let enrichmentWarning {
-      statusText = "Transcript saved; \(enrichmentWarning)"
+      reportWarning("Transcript saved; \(enrichmentWarning)")
     } else {
       showTransientStatus(remoteSyncEnabled
         ? "Saved locally and synced to \(archiveDisplayName)"
@@ -1512,7 +1561,7 @@ final class AppModel {
       recoverableMeetingAvailable = false
       if meetingID != nil {
         state = .idle
-        statusText = "No usable speech was captured for this meeting"
+        reportError("No usable speech was captured for this meeting")
       }
       return
     }
@@ -1555,9 +1604,9 @@ final class AppModel {
       selectedMeetingDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
       await refreshMeetingDay()
       if let cleanupWarning {
-        statusText = "Meeting recovered; audio cleanup pending: \(cleanupWarning)"
+        reportWarning("Meeting recovered; audio cleanup pending: \(cleanupWarning)")
       } else if let enrichmentWarning {
-        statusText = "Transcript recovered; \(enrichmentWarning)"
+        reportWarning("Transcript recovered; \(enrichmentWarning)")
       } else {
         showTransientStatus(remoteSyncEnabled
           ? "Recovered locally and synced to \(archiveDisplayName)"
@@ -1567,7 +1616,7 @@ final class AppModel {
       if !finalized { try? await store.setStatus(.failed) }
       await refreshRecoverableMeetingAvailability()
       state = .failed(error.localizedDescription)
-      statusText = "Recovery retained: \(error.localizedDescription)"
+      reportError("Recovery retained: \(error.localizedDescription)")
     }
   }
 
@@ -1598,13 +1647,23 @@ final class AppModel {
           ? "Structured notes saved locally and synced to \(archiveDisplayName)"
           : "Structured notes saved to the local archive")
       } else {
-        statusText = "Structured notes saved; remote sync pending"
+        reportWarning("Structured notes saved; remote sync pending")
       }
     } catch {
       state = .idle
       enrichmentRetryAvailable = true
-      statusText = "Structured notes retry failed: \(error.localizedDescription)"
+      reportError("Structured notes retry failed: \(error.localizedDescription)")
     }
+  }
+
+  /// Detaches the recorders from the live-transcription feed and ends the
+  /// FIFO stream so the consumer task can finish.
+  private func stopLiveFeed() {
+    microphone.onSamplesAtPosition = nil
+    systemAudio.onSamplesAtPosition = nil
+    liveFeedContinuation?.finish()
+    liveFeedContinuation = nil
+    liveFeedTask = nil
   }
 
   private func showTransientStatus(_ message: String) {
@@ -1618,6 +1677,18 @@ final class AppModel {
       self.statusText = "Ready"
       self.transientStatusTask = nil
     }
+  }
+
+  /// Reports a user-visible failure through the status line.
+  private func reportError(_ message: String) {
+    statusText = message
+    statusSeverity = .error
+  }
+
+  /// Reports a partially successful outcome (saved locally, follow-up pending).
+  private func reportWarning(_ message: String) {
+    statusText = message
+    statusSeverity = .warning
   }
 
 }

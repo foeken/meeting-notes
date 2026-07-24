@@ -12,7 +12,16 @@ SPARKLE_BIN="$ROOT/.build/artifacts/sparkle/Sparkle/bin"
 APP="$ROOT/Meeting Notes.app"
 ARCHIVE_NAME="MeetingNotes-$VERSION.dmg"
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+PLIST_COMMITTED=0
+cleanup() {
+  rm -rf "$WORK"
+  # A failed release must not leave the version bump behind: a dirty
+  # Resources/Info.plist blocks the clean-checkout guard on the next attempt.
+  if [[ "$PLIST_COMMITTED" != 1 ]]; then
+    git -C "$ROOT" checkout --quiet -- Resources/Info.plist 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
   echo "error: release from a clean checkout so version and appcast commits stay isolated" >&2
@@ -89,6 +98,7 @@ if ! git -C "$ROOT" diff --cached --quiet; then
   git -C "$ROOT" commit -m "Publish Meeting Notes $VERSION"
   git -C "$ROOT" push origin main
 fi
+PLIST_COMMITTED=1
 PUBLISHED_SHA=$(git -C "$ROOT" rev-parse HEAD)
 
 RELEASE_ARGS=(

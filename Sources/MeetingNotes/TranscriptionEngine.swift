@@ -93,7 +93,9 @@ actor NemotronTranscriber {
     return Result(text: correctedText, duration: duration, segments: correctedSegments)
   }
 
-  func invalidateVocabulary() {}
+  func invalidateVocabulary() {
+    VocabularyTextCorrector.invalidate()
+  }
 
   nonisolated static func appendedText(previous: String, current: String) -> String {
     let old = previous.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -135,16 +137,66 @@ actor NemotronTranscriber {
   }
 }
 
-private enum VocabularyTextCorrector {
+enum VocabularyTextCorrector {
+  private struct Replacement {
+    let regex: NSRegularExpression
+    let template: String
+  }
+
+  private static let lock = NSLock()
+  nonisolated(unsafe) private static var cachedReplacements: [Replacement]?
+
+  /// Drops the compiled patterns so the next correction re-reads settings.
+  static func invalidate() {
+    lock.lock()
+    cachedReplacements = nil
+    lock.unlock()
+  }
+
   static func apply(to text: String) -> String {
-    VocabularySettingsStore.load().reduce(text) { result, entry in
-      entry.aliases.reduce(result) { corrected, alias in
-        corrected.replacingOccurrences(
-          of: "\\b\(NSRegularExpression.escapedPattern(for: alias))\\b",
-          with: entry.term,
-          options: [.regularExpression, .caseInsensitive])
+    guard !text.isEmpty else { return text }
+    return replacements().reduce(text) { corrected, replacement in
+      let range = NSRange(corrected.startIndex..., in: corrected)
+      guard replacement.regex.firstMatch(in: corrected, range: range) != nil else {
+        return corrected
+      }
+      return replacement.regex.stringByReplacingMatches(
+        in: corrected, range: range, withTemplate: replacement.template)
+    }
+  }
+
+  private static func replacements() -> [Replacement] {
+    lock.lock()
+    defer { lock.unlock() }
+    if let cachedReplacements { return cachedReplacements }
+    let compiled = VocabularySettingsStore.load().flatMap { entry in
+      entry.aliases.compactMap { alias -> Replacement? in
+        guard let regex = try? NSRegularExpression(
+          pattern: pattern(for: alias), options: [.caseInsensitive])
+        else { return nil }
+        return Replacement(
+          regex: regex, template: NSRegularExpression.escapedTemplate(for: entry.term))
       }
     }
+    cachedReplacements = compiled
+    return compiled
+  }
+
+  /// `\b` misbehaves when an alias starts or ends with a non-word character
+  /// (for example ".net" or "C++"): the boundary then anchors to the wrong
+  /// side and the alias never matches. Explicit lookarounds keep whole-word
+  /// semantics for ordinary aliases and still work for punctuated ones.
+  private static func pattern(for alias: String) -> String {
+    let escaped = NSRegularExpression.escapedPattern(for: alias)
+    let leading = alias.unicodeScalars.first.map(isWordScalar) ?? false
+    let trailing = alias.unicodeScalars.last.map(isWordScalar) ?? false
+    let prefix = leading ? #"(?<![\p{L}\p{N}])"# : ""
+    let suffix = trailing ? #"(?![\p{L}\p{N}])"# : ""
+    return prefix + escaped + suffix
+  }
+
+  private static func isWordScalar(_ scalar: Unicode.Scalar) -> Bool {
+    CharacterSet.alphanumerics.contains(scalar)
   }
 }
 
@@ -189,6 +241,7 @@ actor LiveTranscriptionEngine {
   private struct StreamState {
     var manager: StreamingNemotronMultilingualAsrManager?
     var sampleCount = 0
+    var wavPosition: Int?
     var emittedThrough: TimeInterval = 0
     var transcript = ""
     var queue = SerialAudioBatchQueue()
@@ -216,10 +269,18 @@ actor LiveTranscriptionEngine {
     return sessionID
   }
 
-  func append(_ samples: [Int16], source: TranscriptTurn.Source, sessionID: UUID) async {
+  /// `wavPosition` is the source recorder's WAV sample position (including
+  /// alignment padding) after writing these samples. When provided, live turn
+  /// timestamps follow the WAV clock and stay correct across pause/resume
+  /// gaps; otherwise they fall back to counting delivered samples only.
+  func append(
+    _ samples: [Int16], source: TranscriptTurn.Source, sessionID: UUID,
+    wavPosition: Int? = nil
+  ) async {
     guard running, self.sessionID == sessionID, !samples.isEmpty else { return }
     var state = states[source, default: StreamState()]
     let shouldDrain = state.queue.enqueue(samples)
+    if let wavPosition { state.wavPosition = wavPosition }
     states[source] = state
     guard shouldDrain else { return }
     await drain(source: source, sessionID: sessionID)
@@ -289,7 +350,7 @@ actor LiveTranscriptionEngine {
       states[source] = state
       return
     }
-    let end = Double(state.sampleCount) / 16_000
+    let end = Double(state.wavPosition ?? state.sampleCount) / 16_000
     let rawText = VocabularyTextCorrector.apply(to: delta)
     let text = FillerWordSettingsStore.load() ? FillerWordFilter.apply(rawText) : rawText
     guard !text.isEmpty else {

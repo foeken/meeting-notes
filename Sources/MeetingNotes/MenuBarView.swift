@@ -93,11 +93,10 @@ struct MenuBarView: View {
           Spacer()
           Button("Cancel", action: model.cancelMeetingDeletion)
             .buttonStyle(.bordered)
-            .keyboardShortcut(.cancelAction)
+            .keyboardShortcut(.defaultAction)
           Button("Delete", role: .destructive, action: model.confirmMeetingDeletion)
             .buttonStyle(.borderedProminent)
             .tint(.red)
-            .keyboardShortcut(.defaultAction)
         }
         .controlSize(.regular)
       }
@@ -257,6 +256,7 @@ struct MenuBarView: View {
       HStack(spacing: 9) {
         dayNavigationButton(
           systemImage: "chevron.left",
+          accessibilityLabel: "Previous day",
           action: model.showPreviousMeetingDay)
 
         Image(systemName: "calendar")
@@ -274,6 +274,7 @@ struct MenuBarView: View {
 
         dayNavigationButton(
           systemImage: "chevron.right",
+          accessibilityLabel: "Next day",
           isDisabled: !model.canShowNextMeetingDay,
           action: model.showNextMeetingDay)
       }
@@ -293,10 +294,31 @@ struct MenuBarView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 13)
-      } else {
-        ForEach(Array(model.displayedMeetings.prefix(4).enumerated()), id: \.element.id) {
-          index, meeting in
+      } else if model.displayedMeetings.count > 4 {
+        // Keep the popover usable for long days: show every meeting inside a
+        // capped scroll area instead of truncating the list.
+        ScrollView {
           VStack(spacing: 0) {
+            meetingRows
+          }
+        }
+        .frame(height: 264)
+      } else {
+        meetingRows
+      }
+    }
+    .background(cardFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .stroke(.primary.opacity(0.07), lineWidth: 0.5)
+    }
+  }
+
+  private var meetingRows: some View {
+    ForEach(Array(model.displayedMeetings.enumerated()), id: \.element.id) {
+      index, meeting in
+      Group {
+        VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 10) {
               HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(Self.todayTimeFormatter.string(from: meeting.startedAt))
@@ -390,6 +412,7 @@ struct MenuBarView: View {
               .menuStyle(.borderlessButton)
               .fixedSize()
               .disabled(!model.canManageMeetings)
+              .accessibilityLabel("More actions")
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 8)
@@ -420,21 +443,16 @@ struct MenuBarView: View {
             }
 
           }
-          if index < min(model.displayedMeetings.count, 4) - 1 {
-            Divider().padding(.leading, 62)
-          }
+        if index < model.displayedMeetings.count - 1 {
+          Divider().padding(.leading, 62)
         }
       }
-    }
-    .background(cardFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
-        .stroke(.primary.opacity(0.07), lineWidth: 0.5)
     }
   }
 
   private func dayNavigationButton(
     systemImage: String,
+    accessibilityLabel: String,
     isDisabled: Bool = false,
     action: @escaping () -> Void
   ) -> some View {
@@ -446,6 +464,7 @@ struct MenuBarView: View {
     }
     .buttonStyle(.plain)
     .disabled(isDisabled)
+    .accessibilityLabel(accessibilityLabel)
   }
 
   private func durationText(for meeting: TodayMeetingSummary) -> String {
@@ -533,6 +552,7 @@ struct MenuBarView: View {
       .menuIndicator(.hidden)
       .menuStyle(.borderlessButton)
       .fixedSize()
+      .accessibilityLabel("More actions")
     }
   }
 
@@ -568,12 +588,11 @@ struct MenuBarView: View {
 
   private var statusColor: Color {
     if case .failed = model.state { return .red }
-    if model.statusText.localizedCaseInsensitiveContains("failed")
-      || model.statusText.localizedCaseInsensitiveContains("pending")
-    {
-      return .orange
+    switch model.statusSeverity {
+    case .error: return .red
+    case .warning: return .orange
+    case .info: return .secondary
     }
-    return .secondary
   }
 
   private var statusIcon: String {

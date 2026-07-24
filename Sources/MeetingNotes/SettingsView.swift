@@ -497,6 +497,14 @@ private struct HookSettingsPane: View {
       }
       .padding(28)
     }
+    .onAppear {
+      // The persisted hook location can be stale when remote sync was turned
+      // off while this pane was not visible (or by another settings path).
+      if !model.remoteSyncEnabled, model.postMeetingHookLocation == .remote {
+        model.postMeetingHookLocation = .disabled
+        model.schedulePostMeetingHookSettingsSave()
+      }
+    }
     .onChange(of: model.postMeetingHookLocation, model.schedulePostMeetingHookSettingsSave)
     .onChange(of: model.postMeetingHookCommand, model.schedulePostMeetingHookSettingsSave)
   }
@@ -907,6 +915,7 @@ private struct VocabularyRow: View {
         Image(systemName: "trash")
       }
       .buttonStyle(.borderless)
+      .accessibilityLabel("Delete term")
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 9)
@@ -1001,6 +1010,10 @@ private struct MicrophoneSettingsPane: View {
               }
               .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
               .clipShape(RoundedRectangle(cornerRadius: 10))
+              .onDrop(
+                of: [UTType.text],
+                delegate: MicrophonePriorityListDropDelegate(draggedDeviceID: $draggedDeviceID)
+              )
             }
           }
 
@@ -1150,6 +1163,27 @@ private struct MicrophonePriorityDropDelegate: DropDelegate {
   }
 
   func dropExited(info: DropInfo) {}
+}
+
+/// Backstop for the whole priority list: whenever a drag session ends over the
+/// container (including cancelled drags that never call the row delegates'
+/// `performDrop`), clear the stale drag state so no dangling highlight remains.
+private struct MicrophonePriorityListDropDelegate: DropDelegate {
+  @Binding var draggedDeviceID: String?
+
+  func dropUpdated(info: DropInfo) -> DropProposal? {
+    DropProposal(operation: .move)
+  }
+
+  func performDrop(info: DropInfo) -> Bool {
+    draggedDeviceID = nil
+    return true
+  }
+
+  func dropExited(info: DropInfo) {
+    // The drag left the list entirely; treat the session as cancelled.
+    draggedDeviceID = nil
+  }
 }
 
 private struct SettingsWindowConfigurator: NSViewRepresentable {

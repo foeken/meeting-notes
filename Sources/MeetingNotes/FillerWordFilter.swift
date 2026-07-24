@@ -13,8 +13,12 @@ enum FillerWordSettingsStore {
 }
 
 enum FillerWordFilter {
+  // The filter is language-blind, so ambiguous tokens must stay out of the
+  // removal set. "er" is a common Dutch word ("er is", "hij is er") and "mm"
+  // is frequently a short assent rather than a disfluency; only clearly
+  // meaningless variants ("err", "mmm") remain removable.
   private static let words: Set<String> = [
-    "ah", "ahh", "er", "err", "hm", "hmm", "mm", "mmm", "uh", "uhh", "um", "umm",
+    "ah", "ahh", "err", "hm", "hmm", "mmm", "uh", "uhh", "uhm", "um", "umm",
   ]
 
   private static let phrases = [
@@ -23,14 +27,14 @@ enum FillerWordFilter {
   ]
 
   private static let startsWithFiller =
-    #"(?i)^\s*(?:(?:uh+|um+|er+|h+m+|mm+|ah+)\b[\p{P}\s]*|(?:you\s+know|i\s+mean)\s*,)"#
+    #"(?i)^\s*(?:(?:uh+m*|um+|err+|h+m+|mmm+|ah+)\b[\p{P}\s]*|(?:you\s+know|i\s+mean)\s*,)"#
 
   static func apply(_ text: String) -> String {
     guard !text.isEmpty else { return text }
     var result = text
     let capitalizeAfterRemoval = text.range(of: startsWithFiller, options: .regularExpression) != nil
     result = result.replacingOccurrences(
-      of: #"(?i),\s*(?:uh+|um+|er+|h+m+|mm+|ah+)\b[,.]?\s*"#,
+      of: #"(?i),\s*(?:uh+m*|um+|err+|h+m+|mmm+|ah+)\b[,.]?\s*"#,
       with: " ", options: .regularExpression)
     for pattern in phrases {
       result = result.replacingOccurrences(

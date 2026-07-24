@@ -32,7 +32,10 @@ actor ChatGPTAuthService {
     guard let result = try? await run(executable, arguments: ["login", "status"]) else {
       return false
     }
-    return result.status == 0 && result.output.localizedCaseInsensitiveContains("logged in")
+    // "Not logged in" also contains "logged in"; reject the negative phrasing first.
+    return result.status == 0
+      && !result.output.localizedCaseInsensitiveContains("not logged in")
+      && result.output.localizedCaseInsensitiveContains("logged in")
   }
 
   func signIn() async throws {
@@ -128,20 +131,37 @@ actor ChatGPTAuthService {
     if input != nil { process.standardInput = inputPipe }
 
     return try await withCheckedThrowingContinuation { continuation in
+      let resumeState = ResumeOnce()
       process.terminationHandler = { process in
         try? logHandle.synchronize()
         let output = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+        guard resumeState.claim() else { return }
         continuation.resume(returning: CommandResult(
           status: process.terminationStatus, output: output))
       }
       do {
         try process.run()
-        if let input {
-          inputPipe.fileHandleForWriting.write(input)
-          try? inputPipe.fileHandleForWriting.close()
-        }
       } catch {
-        continuation.resume(throwing: error)
+        if resumeState.claim() { continuation.resume(throwing: error) }
+        return
+      }
+      if let input {
+        let writer = inputPipe.fileHandleForWriting
+        // Write off the actor so a slow reader cannot block it, and use the
+        // throwing write(contentsOf:) so a broken pipe (codex exiting before
+        // consuming stdin) surfaces as a Swift error instead of an
+        // uncatchable ObjC exception.
+        DispatchQueue.global(qos: .utility).async {
+          do {
+            try writer.write(contentsOf: input)
+            try writer.close()
+          } catch {
+            try? writer.close()
+            guard resumeState.claim() else { return }
+            continuation.resume(throwing: AuthError.commandFailed(
+              "ChatGPT could not receive the request: \(error.localizedDescription)"))
+          }
+        }
       }
     }
   }
@@ -150,5 +170,20 @@ actor ChatGPTAuthService {
     output.split(separator: "\n")
       .filter { !$0.contains("PATH aliases") && !$0.trimmingCharacters(in: .whitespaces).isEmpty }
       .suffix(3).joined(separator: " ")
+  }
+}
+
+/// Guards a checked continuation against double resumption when both the
+/// termination handler and the stdin writer race to report a failure.
+private final class ResumeOnce: @unchecked Sendable {
+  private let lock = NSLock()
+  private var resumed = false
+
+  func claim() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    if resumed { return false }
+    resumed = true
+    return true
   }
 }

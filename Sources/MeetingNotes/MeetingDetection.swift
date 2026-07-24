@@ -32,7 +32,10 @@ struct MeetingAppDetector {
   ]
 
   private static let browserApps: [String: String] = [
-    "com.google.Chrome": "Chrome"
+    "com.google.Chrome": "Chrome",
+    "com.apple.Safari": "Safari",
+    "company.thebrowser.Browser": "Arc",
+    "com.microsoft.edgemac": "Edge",
   ]
 
   static func detectedApp(cameraActive: Bool, microphoneActive: Bool, apps: [RunningApp]) -> String? {

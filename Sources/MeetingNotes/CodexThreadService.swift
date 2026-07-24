@@ -117,6 +117,7 @@ enum CodexThreadService {
     case projectFolderUnavailable
     case protocolError(String)
     case processExited(String)
+    case timedOut
 
     var errorDescription: String? {
       switch self {
@@ -128,6 +129,8 @@ enum CodexThreadService {
         "Codex could not create the task: \(detail)"
       case .processExited(let detail):
         detail.isEmpty ? "Codex stopped before the task was created." : detail
+      case .timedOut:
+        "Codex did not respond in time. Please try again."
       }
     }
   }
@@ -182,18 +185,6 @@ enum CodexThreadService {
     URL(string: "codex://threads/\(threadID)")
   }
 
-  static func newThreadURL(for context: CodexMeetingContext) -> URL? {
-    var components = URLComponents()
-    components.scheme = "codex"
-    components.host = "threads"
-    components.path = "/new"
-    components.queryItems = [
-      URLQueryItem(name: "path", value: context.projectFolder.path),
-      URLQueryItem(name: "prompt", value: initialPrompt(for: context)),
-    ]
-    return components.url
-  }
-
   static func threadStartParams(for context: CodexMeetingContext) -> [String: Any] {
     [
       "cwd": context.projectFolder.standardizedFileURL.path,
@@ -235,6 +226,10 @@ enum CodexThreadService {
       DispatchQueue.global(qos: .userInitiated).async {
         do {
           let connection = try CodexRPCConnection(executable: executable)
+          // One deadline covers the whole createThread RPC exchange so a
+          // silent app-server can never leak this continuation or block the UI.
+          connection.startDeadline(seconds: 30)
+          defer { connection.cancelDeadline() }
           try connection.sendRequest(
             id: 1,
             method: "initialize",
@@ -298,12 +293,20 @@ enum CodexThreadService {
 }
 
 private final class CodexRPCConnection {
+  /// Only notification methods that `waitUntilUserMessageStarts` matches on are
+  /// worth buffering; everything else (deltas, token counts, …) is dropped.
+  private static let bufferedNotificationMethods: Set<String> = ["item/started"]
+  private static let maxBufferedNotifications = 64
+
   private let process: Process
   private let input: FileHandle
   private let output: FileHandle
   private let errorOutput: FileHandle
   private var buffer = Data()
   private var pendingNotifications: [[String: Any]] = []
+  private let deadlineLock = NSLock()
+  private var deadlineItem: DispatchWorkItem?
+  private var deadlineExpired = false
 
   init(executable: URL) throws {
     process = Process()
@@ -322,10 +325,42 @@ private final class CodexRPCConnection {
   }
 
   deinit {
+    cancelDeadline()
     try? input.close()
     try? output.close()
     try? errorOutput.close()
     if process.isRunning { process.terminate() }
+  }
+
+  /// Arms a watchdog that tears the connection down after `seconds`, which
+  /// unblocks any pending read and converts it into `ServiceError.timedOut`.
+  func startDeadline(seconds: TimeInterval) {
+    let item = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.deadlineLock.lock()
+      self.deadlineExpired = true
+      self.deadlineLock.unlock()
+      // Closing stdout makes the blocked availableData read return empty data.
+      if self.process.isRunning { self.process.terminate() }
+      try? self.output.close()
+    }
+    deadlineLock.lock()
+    deadlineItem = item
+    deadlineLock.unlock()
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + seconds, execute: item)
+  }
+
+  func cancelDeadline() {
+    deadlineLock.lock()
+    deadlineItem?.cancel()
+    deadlineItem = nil
+    deadlineLock.unlock()
+  }
+
+  private var hasTimedOut: Bool {
+    deadlineLock.lock()
+    defer { deadlineLock.unlock() }
+    return deadlineExpired
   }
 
   func sendRequest(id: Int, method: String, params: [String: Any]) throws {
@@ -346,7 +381,7 @@ private final class CodexRPCConnection {
         }
         return object
       }
-      if object["method"] != nil { pendingNotifications.append(object) }
+      bufferNotification(object)
     }
   }
 
@@ -361,7 +396,19 @@ private final class CodexRPCConnection {
       let object = try nextNotificationObject()
       if CodexThreadService.isVisibleUserMessageEvent(object, threadID: threadID) { return }
     }
+    if hasTimedOut { throw CodexThreadService.ServiceError.timedOut }
     throw CodexThreadService.ServiceError.processExited("")
+  }
+
+  private func bufferNotification(_ object: [String: Any]) {
+    guard let method = object["method"] as? String,
+      Self.bufferedNotificationMethods.contains(method)
+    else { return }
+    pendingNotifications.append(object)
+    if pendingNotifications.count > Self.maxBufferedNotifications {
+      pendingNotifications.removeFirst(
+        pendingNotifications.count - Self.maxBufferedNotifications)
+    }
   }
 
   private func nextNotificationObject() throws -> [String: Any] {
@@ -387,6 +434,7 @@ private final class CodexRPCConnection {
       }
       let data = output.availableData
       guard !data.isEmpty else {
+        if hasTimedOut { throw CodexThreadService.ServiceError.timedOut }
         let detail = String(data: errorOutput.availableData, encoding: .utf8)?
           .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         throw CodexThreadService.ServiceError.processExited(detail)
