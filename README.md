@@ -1,4 +1,6 @@
-# Meeting Notes Menu
+<img width="954" height="992" alt="CleanShot 2026-07-24 at 09 59 22@2x" src="https://github.com/user-attachments/assets/6cfeb114-cb79-45e0-a4ee-67a52ceee159" />
+
+# Meeting Notes
 
 A deliberately small, native macOS menu-bar utility for private meeting
 transcripts. It records the microphone and system audio as separate tracks,
