@@ -1,4 +1,4 @@
-<img width="1254" height="1254" alt="Generated image 1 (1)" src="https://github.com/user-attachments/assets/3b0ea0ec-2799-4515-afca-6d0b940fa90b" />
+<img width="1254" height="1254" alt="Meeting Notes app icon: a white waveform on a black rounded square" src="https://github.com/user-attachments/assets/3b0ea0ec-2799-4515-afca-6d0b940fa90b" />
 
 
 # Meeting Notes
@@ -79,26 +79,9 @@ On first use macOS asks for Calendar, Microphone, and Screen & System Audio
 Recording access. The first transcription downloads the local Nemotron 3.5 model assets.
 
 The **…** menu includes **Check for Updates…**. Automatic update checks and the
-standard update UI are provided by Sparkle. Published builds read their signed
-appcast over HTTPS from this repository; the update signing key remains in the
-release Mac's Keychain.
+standard update UI are provided by Sparkle.
 
-### Publishing a release
-
-Public releases require a Developer ID Application certificate, a configured
-`notarytool` Keychain profile, the `meeting-notes-menu` Sparkle signing key, and
-authenticated GitHub CLI access. Signed archives are attached to GitHub Releases,
-while `appcast.xml` is versioned alongside the source. Private signing material
-never enters the repository.
-
-```sh
-export MEETING_NOTES_NOTARY_PROFILE="meeting-notes-menu"
-scripts/release.sh 0.3.0 3 ~/Desktop/meeting-notes-0.3.0.md
-```
-
-The script updates both bundle version fields, builds and signs the app,
-submits it for notarization, staples the ticket, generates an EdDSA-signed
-appcast, commits the version and feed, and uploads the archive to a GitHub Release.
+Publishing a release is documented in [`RELEASING.md`](RELEASING.md).
 
 ## Archive and AI retrieval settings
 
