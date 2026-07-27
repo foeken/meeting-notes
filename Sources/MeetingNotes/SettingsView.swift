@@ -521,10 +521,13 @@ private struct HookSettingsPane: View {
       VStack(alignment: .leading, spacing: 18) {
         SettingsPaneHeader(
           title: "Hooks",
-          subtitle: "Run a command when the finalized meeting archive changes."
+          subtitle: "Run a command or send a web request when the finalized meeting archive changes."
         )
 
         Divider()
+
+        Text("Command")
+          .font(.headline)
 
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
           GridRow {
@@ -569,6 +572,64 @@ private struct HookSettingsPane: View {
             .foregroundStyle(model.hookSettingsStatusText.contains("failed") ? .red : .secondary)
         }
 
+        Divider()
+
+        Text("Web request")
+          .font(.headline)
+
+        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
+          GridRow {
+            Text("URL")
+              .gridColumnAlignment(.trailing)
+            HStack(spacing: 8) {
+              TextField("https://example.com/meetings", text: $model.httpHookURLDraft)
+                .textFieldStyle(.roundedBorder)
+              Button("Test", action: model.testHTTPHook)
+                .disabled(!model.canTestHTTPHook)
+            }
+          }
+
+          if !model.httpHookURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            GridRow {
+              Text("Send")
+                .gridColumnAlignment(.trailing)
+              Picker("Send", selection: $model.httpHookPayload) {
+                ForEach(RemoteSyncService.Configuration.HookPayload.allCases) { payload in
+                  Text(payload.label).tag(payload)
+                }
+              }
+              .labelsHidden()
+              .fixedSize()
+            }
+
+            GridRow {
+              Text("Headers")
+                .gridColumnAlignment(.trailing)
+              GrowingTextEditor(text: $model.httpHookHeadersDraft, minHeight: 72)
+                .padding(2)
+                .background(
+                  Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                  RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(nsColor: .separatorColor))
+                }
+            }
+          }
+        }
+        .controlSize(.large)
+
+        if !model.httpHookURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Text("Sends the chosen Markdown file as the request body. Add one header per line, for example Authorization: Bearer abc123.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        if !model.httpHookStatusText.isEmpty {
+          Text(model.httpHookStatusText)
+            .font(.caption)
+            .foregroundStyle(model.httpHookStatusText.contains("failed") ? .red : .secondary)
+        }
+
       }
       .padding(28)
     }
@@ -582,6 +643,9 @@ private struct HookSettingsPane: View {
     }
     .onChange(of: model.postMeetingHookLocation, model.schedulePostMeetingHookSettingsSave)
     .onChange(of: model.postMeetingHookCommand, model.schedulePostMeetingHookSettingsSave)
+    .onChange(of: model.httpHookURLDraft, model.scheduleHTTPHookSettingsSave)
+    .onChange(of: model.httpHookHeadersDraft, model.scheduleHTTPHookSettingsSave)
+    .onChange(of: model.httpHookPayload, model.scheduleHTTPHookSettingsSave)
   }
 }
 

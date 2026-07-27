@@ -16,6 +16,9 @@ actor RemoteSyncService {
     var includeAudio: Bool
     var postMeetingHookLocation: HookLocation
     var postMeetingHookCommand: String
+    var httpHookURL: String
+    var httpHookHeaders: String
+    var httpHookPayload: HookPayload
 
     var remoteSyncEnabled: Bool {
       get { destination == .remote }
@@ -30,7 +33,10 @@ actor RemoteSyncService {
       enabled: Bool,
       includeAudio: Bool = false,
       postMeetingHookLocation: HookLocation = .disabled,
-      postMeetingHookCommand: String = ""
+      postMeetingHookCommand: String = "",
+      httpHookURL: String = "",
+      httpHookHeaders: String = "",
+      httpHookPayload: HookPayload = .meetingNotes
     ) {
       self.destination = destination
       self.host = host
@@ -40,6 +46,9 @@ actor RemoteSyncService {
       self.includeAudio = includeAudio
       self.postMeetingHookLocation = postMeetingHookLocation
       self.postMeetingHookCommand = postMeetingHookCommand
+      self.httpHookURL = httpHookURL
+      self.httpHookHeaders = httpHookHeaders
+      self.httpHookPayload = httpHookPayload
     }
 
     static var defaults: Configuration {
@@ -51,7 +60,10 @@ actor RemoteSyncService {
         enabled: true,
         includeAudio: false,
         postMeetingHookLocation: .disabled,
-        postMeetingHookCommand: ""
+        postMeetingHookCommand: "",
+        httpHookURL: "",
+        httpHookHeaders: "",
+        httpHookPayload: .meetingNotes
       )
     }
   }
@@ -188,7 +200,7 @@ actor RemoteSyncService {
         if let previousRelativePath = options.previousRelativePath {
           try await deleteArchiveFolder(relative: previousRelativePath, clearPointer: false)
         }
-        if options.runHookAfterSync { try await runPostMeetingHook() }
+        if options.runHookAfterSync { try await runPostMeetingHook(folder: folder) }
         if (try? Data(contentsOf: marker)) == revision {
           try? FileManager.default.removeItem(at: marker)
           if options.previousRelativePath != nil {
@@ -298,15 +310,37 @@ actor RemoteSyncService {
     }
   }
 
-  private func runPostMeetingHook() async throws {
-    try await runPostMeetingHook(configuration: configuration)
+  /// `folder` is the meeting that changed, when one is known. The HTTP hook
+  /// needs it to read the document it posts; the command hook does not.
+  private func runPostMeetingHook(folder: URL? = nil) async throws {
+    try await runPostMeetingHook(configuration: configuration, folder: folder)
   }
 
+  /// Tests only the command hook, so the Test button next to it cannot fire an
+  /// unrelated HTTP request.
   func testPostMeetingHook(configuration: Configuration) async throws {
-    try await runPostMeetingHook(configuration: configuration)
+    try await runCommandHook(configuration: configuration)
   }
 
-  private func runPostMeetingHook(configuration config: Configuration) async throws {
+  /// Sends a single test request without touching the command hook.
+  func testPostMeetingHTTPHook(configuration: Configuration) async throws {
+    try await runHTTPHook(configuration: configuration, folder: nil)
+  }
+
+  private func runPostMeetingHook(
+    configuration config: Configuration, folder: URL?
+  ) async throws {
+    // Both hooks are independent, so a failing command hook must not stop the
+    // HTTP hook from firing (and the reverse).
+    var failure: Error?
+    do { try await runCommandHook(configuration: config) } catch { failure = error }
+    do { try await runHTTPHook(configuration: config, folder: folder) } catch {
+      failure = failure ?? error
+    }
+    if let failure { throw failure }
+  }
+
+  private func runCommandHook(configuration config: Configuration) async throws {
     let command = config.postMeetingHookCommand.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !command.isEmpty, config.postMeetingHookLocation != .disabled else { return }
     switch config.postMeetingHookLocation {
@@ -335,6 +369,75 @@ actor RemoteSyncService {
 
   private static func shellQuote(_ value: String) -> String {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+  }
+
+  /// Posts the chosen finished document to a user-supplied endpoint. The body
+  /// is the Markdown file itself, so a receiver can store it verbatim.
+  private func runHTTPHook(configuration config: Configuration, folder: URL?) async throws {
+    let rawURL = config.httpHookURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !rawURL.isEmpty else { return }
+    if let urlError = Configuration.httpHookURLError(rawURL) {
+      lastError = "HTTP hook skipped: \(urlError)"
+      return
+    }
+    guard let url = URL(string: rawURL) else { return }
+
+    let document = try httpHookDocument(configuration: config, folder: folder)
+    guard let document else { return }
+
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.timeoutInterval = 30
+    request.setValue("text/markdown; charset=utf-8", forHTTPHeaderField: "Content-Type")
+    request.setValue(document.fileName, forHTTPHeaderField: "X-Meeting-Notes-File")
+    if let meetingPath = document.meetingPath {
+      request.setValue(meetingPath, forHTTPHeaderField: "X-Meeting-Notes-Meeting")
+    }
+    // User headers win, so Content-Type and friends can be overridden.
+    for header in Configuration.parseHookHeaders(config.httpHookHeaders) {
+      request.setValue(header.value, forHTTPHeaderField: header.name)
+    }
+    request.httpBody = Data(document.body.utf8)
+
+    let (_, response) = try await URLSession.shared.data(for: request)
+    guard let http = response as? HTTPURLResponse else { return }
+    guard (200..<300).contains(http.statusCode) else {
+      throw NSError(
+        domain: "HTTPHook", code: http.statusCode,
+        userInfo: [
+          NSLocalizedDescriptionKey:
+            "HTTP hook returned status \(http.statusCode)."
+        ])
+    }
+  }
+
+  private struct HTTPHookDocument {
+    let fileName: String
+    let body: String
+    let meetingPath: String?
+  }
+
+  private func httpHookDocument(
+    configuration config: Configuration, folder: URL?
+  ) throws -> HTTPHookDocument? {
+    let fileName = config.httpHookPayload.fileName
+    guard let folder else {
+      // A test run has no meeting yet; send a recognizable sample instead.
+      return HTTPHookDocument(
+        fileName: fileName,
+        body: "# Meeting Notes test\n\nThis is a test request from Meeting Notes.\n",
+        meetingPath: nil)
+    }
+    let file = folder.appending(path: fileName)
+    guard let body = try? String(contentsOf: file, encoding: .utf8) else {
+      // A deleted meeting, or a payload this meeting does not have (for
+      // example a purged transcript), is not a failure worth retrying.
+      return nil
+    }
+    return HTTPHookDocument(
+      fileName: fileName,
+      body: body,
+      meetingPath: folder.pathComponents.suffix(4).joined(separator: "/"))
   }
 
   static func isSafeMeetingPath(_ path: String) -> Bool {

@@ -922,14 +922,54 @@ import Testing
     initial.localPath == "~/Documents/Meetings Notes")
   #expect(initial.postMeetingHookLocation == .disabled)
   #expect(initial.postMeetingHookCommand.isEmpty)
+  #expect(initial.httpHookURL.isEmpty)
+  #expect(initial.httpHookHeaders.isEmpty)
+  #expect(initial.httpHookPayload == .meetingNotes)
 
   let local = RemoteSyncService.Configuration(
     destination: .local, host: initial.host, path: initial.path,
     localPath: "/tmp/Meeting Notes Archive", enabled: true,
     postMeetingHookLocation: .local,
-    postMeetingHookCommand: "meeting-index refresh")
+    postMeetingHookCommand: "meeting-index refresh",
+    httpHookURL: "https://example.com/hook",
+    httpHookHeaders: "Authorization: Bearer token",
+    httpHookPayload: .transcript)
   ArchiveSettingsStore.save(local, to: defaults)
   #expect(ArchiveSettingsStore.load(from: defaults) == local)
+}
+
+@Test func httpHookParsesHeadersAndValidatesItsURL() {
+  typealias Configuration = RemoteSyncService.Configuration
+
+  let headers = Configuration.parseHookHeaders(
+    """
+    Authorization: Bearer abc123
+    # a comment line is ignored
+
+    X-Source:  Meeting Notes
+    not-a-header
+    Empty:
+    """)
+  #expect(headers.count == 2)
+  #expect(headers[0] == Configuration.HTTPHookHeader(name: "Authorization", value: "Bearer abc123"))
+  // Surrounding whitespace is trimmed from both sides of the colon.
+  #expect(headers[1] == Configuration.HTTPHookHeader(name: "X-Source", value: "Meeting Notes"))
+
+  // An empty URL means the hook is simply off, not misconfigured.
+  #expect(Configuration.httpHookURLError("") == nil)
+  #expect(Configuration.httpHookURLError("https://example.com/hook") == nil)
+  #expect(Configuration.httpHookURLError("http://localhost:8080/hook") == nil)
+  #expect(Configuration.httpHookURLError("example.com/hook") != nil)
+  #expect(Configuration.httpHookURLError("ftp://example.com") != nil)
+
+  var configuration = Configuration.defaults
+  configuration.httpHookURL = "not a url"
+  #expect(configuration.validationError != nil)
+  configuration.httpHookURL = "https://example.com/hook"
+  #expect(configuration.validationError == nil)
+
+  #expect(Configuration.HookPayload.meetingNotes.fileName == "meeting.md")
+  #expect(Configuration.HookPayload.transcript.fileName == "transcript.md")
 }
 
 @Test func archiveHookAllowsAnEmptyCommandAndRequiresRemoteSyncWhenActive() {

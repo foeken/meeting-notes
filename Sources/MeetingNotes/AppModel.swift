@@ -47,6 +47,10 @@ final class AppModel {
   var localArchivePathDraft = RemoteSyncService.Configuration.defaults.localPath
   var postMeetingHookLocation = RemoteSyncService.Configuration.defaults.postMeetingHookLocation
   var postMeetingHookCommand = RemoteSyncService.Configuration.defaults.postMeetingHookCommand
+  var httpHookURLDraft = RemoteSyncService.Configuration.defaults.httpHookURL
+  var httpHookHeadersDraft = RemoteSyncService.Configuration.defaults.httpHookHeaders
+  var httpHookPayload = RemoteSyncService.Configuration.defaults.httpHookPayload
+  var httpHookStatusText = ""
   var settingsStatusText = ""
   var hookSettingsStatusText = ""
   var vocabularyEntries = VocabularySettingsStore.load()
@@ -119,6 +123,7 @@ final class AppModel {
   private var transientStatusTask: Task<Void, Never>?
   private var archiveSettingsSaveTask: Task<Void, Never>?
   private var hookSettingsSaveTask: Task<Void, Never>?
+  private var httpHookSaveTask: Task<Void, Never>?
   private var latestDetectedMeetingApp: String?
   private var recordingMeetingApp: String?
   private var stoppedMeetingFinalizationTasks: [UUID: Task<Void, Never>] = [:]
@@ -140,6 +145,9 @@ final class AppModel {
     localArchivePathDraft = archiveConfiguration.localPath
     postMeetingHookLocation = archiveConfiguration.postMeetingHookLocation
     postMeetingHookCommand = archiveConfiguration.postMeetingHookCommand
+    httpHookURLDraft = archiveConfiguration.httpHookURL
+    httpHookHeadersDraft = archiveConfiguration.httpHookHeaders
+    httpHookPayload = archiveConfiguration.httpHookPayload
     let transcriptRetention = TranscriptRetentionSettingsStore.load()
     automaticTranscriptDeletionEnabled = transcriptRetention.enabled
     transcriptRetentionDays = transcriptRetention.days
@@ -626,6 +634,15 @@ final class AppModel {
       && !postMeetingHookCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
+  var httpHookValidationError: String? {
+    RemoteSyncService.Configuration.httpHookURLError(httpHookURLDraft)
+  }
+
+  var canTestHTTPHook: Bool {
+    !httpHookURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && httpHookValidationError == nil
+  }
+
   var archiveSettingsValidationError: String? {
     let configuration = archiveConfiguration
     if let error = configuration.validationError { return error }
@@ -654,7 +671,10 @@ final class AppModel {
       enabled: true,
       includeAudio: keepAudioAfterProcessing,
       postMeetingHookLocation: postMeetingHookLocation,
-      postMeetingHookCommand: postMeetingHookCommand
+      postMeetingHookCommand: postMeetingHookCommand,
+      httpHookURL: httpHookURLDraft.trimmingCharacters(in: .whitespacesAndNewlines),
+      httpHookHeaders: httpHookHeadersDraft,
+      httpHookPayload: httpHookPayload
     )
   }
 
@@ -704,6 +724,41 @@ final class AppModel {
       await remoteSync.update(configuration: savedConfiguration)
       guard !Task.isCancelled else { return }
       hookSettingsStatusText = "Saved"
+    }
+  }
+
+  func scheduleHTTPHookSettingsSave() {
+    httpHookSaveTask?.cancel()
+    if let error = httpHookValidationError {
+      httpHookStatusText = error
+      return
+    }
+    let url = httpHookURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let headers = httpHookHeadersDraft
+    let payload = httpHookPayload
+    httpHookStatusText = "Saving…"
+    httpHookSaveTask = Task {
+      try? await Task.sleep(for: .milliseconds(500))
+      guard !Task.isCancelled else { return }
+      ArchiveSettingsStore.saveHTTPHook(url: url, headers: headers, payload: payload)
+      let savedConfiguration = ArchiveSettingsStore.load()
+      await remoteSync.update(configuration: savedConfiguration)
+      guard !Task.isCancelled else { return }
+      httpHookStatusText = url.isEmpty ? "" : "Saved"
+    }
+  }
+
+  func testHTTPHook() {
+    guard canTestHTTPHook else { return }
+    let configuration = archiveConfiguration
+    httpHookStatusText = "Sending test request…"
+    Task {
+      do {
+        try await remoteSync.testPostMeetingHTTPHook(configuration: configuration)
+        httpHookStatusText = "Request accepted"
+      } catch {
+        httpHookStatusText = "Request failed: \(error.localizedDescription)"
+      }
     }
   }
 

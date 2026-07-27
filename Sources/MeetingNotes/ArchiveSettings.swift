@@ -16,6 +16,61 @@ extension RemoteSyncService.Configuration {
     }
   }
 
+  /// Which finished document an HTTP hook sends.
+  enum HookPayload: String, CaseIterable, Identifiable, Sendable {
+    case meetingNotes
+    case transcript
+
+    var id: String { rawValue }
+    var label: String {
+      switch self {
+      case .meetingNotes: "Meeting notes"
+      case .transcript: "Word-for-word transcript"
+      }
+    }
+
+    var fileName: String {
+      switch self {
+      case .meetingNotes: "meeting.md"
+      case .transcript: "transcript.md"
+      }
+    }
+  }
+
+  struct HTTPHookHeader: Equatable, Sendable {
+    let name: String
+    let value: String
+  }
+
+  /// Parses `Name: value` lines. Blank lines and `#` comments are ignored so a
+  /// user can annotate their header list.
+  static func parseHookHeaders(_ raw: String) -> [HTTPHookHeader] {
+    raw.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      guard !trimmed.isEmpty, !trimmed.hasPrefix("#"),
+        let separator = trimmed.firstIndex(of: ":")
+      else { return nil }
+      let name = trimmed[..<separator].trimmingCharacters(in: .whitespaces)
+      let value = trimmed[trimmed.index(after: separator)...]
+        .trimmingCharacters(in: .whitespaces)
+      guard !name.isEmpty, !value.isEmpty else { return nil }
+      return HTTPHookHeader(name: name, value: value)
+    }
+  }
+
+  /// Validates the destination of an HTTP hook without revealing header values.
+  static func httpHookURLError(_ raw: String) -> String? {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+      url.host?.isEmpty == false
+    else { return "Enter a complete URL, for example https://example.com/hook." }
+    guard scheme == "https" || scheme == "http" else {
+      return "The URL must start with https:// or http://."
+    }
+    return nil
+  }
+
   enum Destination: String, CaseIterable, Identifiable, Sendable {
     case remote
     case local
@@ -47,6 +102,7 @@ extension RemoteSyncService.Configuration {
     if !hook.isEmpty, postMeetingHookLocation == .remote, !remoteSyncEnabled {
       return "Enable remote sync before running the hook on the remote server."
     }
+    if let urlError = Self.httpHookURLError(httpHookURL) { return urlError }
     return nil
   }
 
@@ -66,6 +122,9 @@ enum ArchiveSettingsStore {
     static let remoteEnabled = "archive.remoteEnabled"
     static let postMeetingHookLocation = "archive.postMeetingHookLocation"
     static let postMeetingHookCommand = "archive.postMeetingHookCommand"
+    static let httpHookURL = "archive.httpHookURL"
+    static let httpHookHeaders = "archive.httpHookHeaders"
+    static let httpHookPayload = "archive.httpHookPayload"
   }
 
   static func load(from defaults: UserDefaults = .standard) -> RemoteSyncService.Configuration {
@@ -88,7 +147,12 @@ enum ArchiveSettingsStore {
       postMeetingHookLocation: defaults.string(forKey: Key.postMeetingHookLocation)
         .flatMap(RemoteSyncService.Configuration.HookLocation.init(rawValue:)) ?? fallback.postMeetingHookLocation,
       postMeetingHookCommand: defaults.string(forKey: Key.postMeetingHookCommand)
-        ?? fallback.postMeetingHookCommand
+        ?? fallback.postMeetingHookCommand,
+      httpHookURL: defaults.string(forKey: Key.httpHookURL) ?? fallback.httpHookURL,
+      httpHookHeaders: defaults.string(forKey: Key.httpHookHeaders) ?? fallback.httpHookHeaders,
+      httpHookPayload: defaults.string(forKey: Key.httpHookPayload)
+        .flatMap(RemoteSyncService.Configuration.HookPayload.init(rawValue:))
+        ?? fallback.httpHookPayload
     )
   }
 
@@ -103,6 +167,9 @@ enum ArchiveSettingsStore {
     defaults.set(configuration.localPath, forKey: Key.localPath)
     defaults.set(configuration.postMeetingHookLocation.rawValue, forKey: Key.postMeetingHookLocation)
     defaults.set(configuration.postMeetingHookCommand, forKey: Key.postMeetingHookCommand)
+    defaults.set(configuration.httpHookURL, forKey: Key.httpHookURL)
+    defaults.set(configuration.httpHookHeaders, forKey: Key.httpHookHeaders)
+    defaults.set(configuration.httpHookPayload.rawValue, forKey: Key.httpHookPayload)
   }
 
   static func saveStorage(
@@ -123,5 +190,16 @@ enum ArchiveSettingsStore {
   ) {
     defaults.set(location.rawValue, forKey: Key.postMeetingHookLocation)
     defaults.set(command, forKey: Key.postMeetingHookCommand)
+  }
+
+  static func saveHTTPHook(
+    url: String,
+    headers: String,
+    payload: RemoteSyncService.Configuration.HookPayload,
+    to defaults: UserDefaults = .standard
+  ) {
+    defaults.set(url, forKey: Key.httpHookURL)
+    defaults.set(headers, forKey: Key.httpHookHeaders)
+    defaults.set(payload.rawValue, forKey: Key.httpHookPayload)
   }
 }
