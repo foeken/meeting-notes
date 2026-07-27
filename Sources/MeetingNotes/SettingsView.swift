@@ -516,11 +516,6 @@ private struct StorageSettingsPane: View {
 private struct HookSettingsPane: View {
   @Bindable var model: AppModel
 
-  private static let headersPlaceholder = """
-    Authorization: Bearer sk-example-token
-    X-Source: Meeting Notes
-    """
-
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
@@ -610,32 +605,21 @@ private struct HookSettingsPane: View {
             GridRow {
               Text("Headers")
                 .gridColumnAlignment(.trailing)
-              ZStack(alignment: .topLeading) {
-                GrowingTextEditor(text: $model.httpHookHeadersDraft, minHeight: 72)
-                  .padding(2)
-                  .background(
-                    Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                  .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                      .stroke(Color(nsColor: .separatorColor))
-                  }
-
-                if model.httpHookHeadersDraft.isEmpty {
-                  Text(Self.headersPlaceholder)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 12)
-                    .allowsHitTesting(false)
+              GrowingTextEditor(text: $model.httpHookHeadersDraft, minHeight: 72)
+                .padding(2)
+                .background(
+                  Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                  RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(nsColor: .separatorColor))
                 }
-              }
             }
           }
         }
         .controlSize(.large)
 
         if !model.httpHookURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          Text("Sends the chosen Markdown file as the request body. Add one header per line, for example Authorization: Bearer abc123.")
+          Text("Sends the chosen Markdown file as the request body, with the meeting title, id, times, and folder as X-Meeting-Notes-… headers. Add one header per line to authenticate; your headers override the defaults.")
             .font(.caption)
             .foregroundStyle(.secondary)
         }

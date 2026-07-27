@@ -923,7 +923,11 @@ import Testing
   #expect(initial.postMeetingHookLocation == .disabled)
   #expect(initial.postMeetingHookCommand.isEmpty)
   #expect(initial.httpHookURL.isEmpty)
-  #expect(initial.httpHookHeaders.isEmpty)
+  // Headers ship prefilled with an example so the expected shape is obvious.
+  #expect(
+    initial.httpHookHeaders
+      == RemoteSyncService.Configuration.defaultHTTPHookHeaders)
+  #expect(initial.httpHookHeaders.contains("Authorization: Bearer"))
   #expect(initial.httpHookPayload == .meetingNotes)
 
   let local = RemoteSyncService.Configuration(
@@ -970,6 +974,52 @@ import Testing
 
   #expect(Configuration.HookPayload.meetingNotes.fileName == "meeting.md")
   #expect(Configuration.HookPayload.transcript.fileName == "transcript.md")
+}
+
+@Test func httpHookAlwaysSendsMeetingMetadataHeaders() {
+  let started = Date(timeIntervalSince1970: 1_767_268_800)
+  var meeting = MeetingDocument(
+    id: UUID(uuidString: "12345678-1234-1234-1234-123456789ABC")!,
+    title: "Portfolio review",
+    startedAt: started,
+    status: .complete,
+    transcript: [])
+  meeting.endedAt = started.addingTimeInterval(1_800)
+  meeting.calendar = CalendarMetadata(
+    eventIdentifier: "event-1",
+    calendarTitle: "Work",
+    scheduledStart: started,
+    scheduledEnd: started.addingTimeInterval(1_800),
+    organizer: nil,
+    participants: [
+      MeetingParticipant(name: "Andre Foeken"),
+      MeetingParticipant(name: "Sandra"),
+    ])
+
+  let headers = Dictionary(
+    uniqueKeysWithValues: RemoteSyncService.metadataHeaders(
+      fileName: "meeting.md",
+      meetingPath: "2026/01/01/1030-portfolio-review-12345678",
+      meeting: meeting))
+
+  #expect(headers["X-Meeting-Notes-File"] == "meeting.md")
+  #expect(headers["X-Meeting-Notes-Folder"] == "2026/01/01/1030-portfolio-review-12345678")
+  #expect(headers["X-Meeting-Notes-Id"] == "12345678-1234-1234-1234-123456789ABC")
+  #expect(headers["X-Meeting-Notes-Title"] == "Portfolio review")
+  #expect(headers["X-Meeting-Notes-Duration-Seconds"] == "1800")
+  #expect(headers["X-Meeting-Notes-Participants"] == "Andre Foeken, Sandra")
+  #expect(headers["X-Meeting-Notes-Started-At"]?.hasPrefix("2026-01-01") == true)
+
+  // A test request has no meeting yet, so only the file name is known.
+  let testHeaders = Dictionary(
+    uniqueKeysWithValues: RemoteSyncService.metadataHeaders(
+      fileName: "transcript.md", meetingPath: nil, meeting: nil))
+  #expect(testHeaders["X-Meeting-Notes-File"] == "transcript.md")
+  #expect(testHeaders["X-Meeting-Notes-Id"] == nil)
+
+  // Header values stay single-line and ASCII-safe.
+  #expect(RemoteSyncService.sanitizedHeaderValue("Line one\nLine two") == "Line one Line two")
+  #expect(RemoteSyncService.sanitizedHeaderValue("Café ☕").contains("%") == true)
 }
 
 @Test func archiveHookAllowsAnEmptyCommandAndRequiresRemoteSyncWhenActive() {

@@ -125,6 +125,7 @@ enum ArchiveSettingsStore {
     static let httpHookURL = "archive.httpHookURL"
     static let httpHookHeaders = "archive.httpHookHeaders"
     static let httpHookPayload = "archive.httpHookPayload"
+    static let httpHookHeadersSeeded = "archive.httpHookHeadersSeeded"
   }
 
   static func load(from defaults: UserDefaults = .standard) -> RemoteSyncService.Configuration {
@@ -149,11 +150,21 @@ enum ArchiveSettingsStore {
       postMeetingHookCommand: defaults.string(forKey: Key.postMeetingHookCommand)
         ?? fallback.postMeetingHookCommand,
       httpHookURL: defaults.string(forKey: Key.httpHookURL) ?? fallback.httpHookURL,
-      httpHookHeaders: defaults.string(forKey: Key.httpHookHeaders) ?? fallback.httpHookHeaders,
+      httpHookHeaders: seededHTTPHookHeaders(from: defaults, fallback: fallback.httpHookHeaders),
       httpHookPayload: defaults.string(forKey: Key.httpHookPayload)
         .flatMap(RemoteSyncService.Configuration.HookPayload.init(rawValue:))
         ?? fallback.httpHookPayload
     )
+  }
+
+  /// Shows the example headers until the user saves the field themselves.
+  /// After that their value wins, including a deliberately empty one.
+  private static func seededHTTPHookHeaders(
+    from defaults: UserDefaults, fallback: String
+  ) -> String {
+    guard let stored = defaults.string(forKey: Key.httpHookHeaders) else { return fallback }
+    if stored.isEmpty, !defaults.bool(forKey: Key.httpHookHeadersSeeded) { return fallback }
+    return stored
   }
 
   static func save(
@@ -201,5 +212,6 @@ enum ArchiveSettingsStore {
     defaults.set(url, forKey: Key.httpHookURL)
     defaults.set(headers, forKey: Key.httpHookHeaders)
     defaults.set(payload.rawValue, forKey: Key.httpHookPayload)
+    defaults.set(true, forKey: Key.httpHookHeadersSeeded)
   }
 }

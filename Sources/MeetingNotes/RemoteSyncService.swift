@@ -7,6 +7,12 @@ actor RemoteSyncService {
 
   struct Configuration: Equatable, Sendable {
     static let defaultLocalPath = "~/Documents/Meetings Notes"
+    /// Prefilled so the expected `Name: value` shape is obvious. Edit or clear
+    /// these before pointing the hook at a real endpoint.
+    static let defaultHTTPHookHeaders = """
+      Authorization: Bearer sk-example-token
+      X-Source: Meeting Notes
+      """
 
     var destination: Destination
     var host: String
@@ -35,7 +41,7 @@ actor RemoteSyncService {
       postMeetingHookLocation: HookLocation = .disabled,
       postMeetingHookCommand: String = "",
       httpHookURL: String = "",
-      httpHookHeaders: String = "",
+      httpHookHeaders: String = Configuration.defaultHTTPHookHeaders,
       httpHookPayload: HookPayload = .meetingNotes
     ) {
       self.destination = destination
@@ -62,7 +68,7 @@ actor RemoteSyncService {
         postMeetingHookLocation: .disabled,
         postMeetingHookCommand: "",
         httpHookURL: "",
-        httpHookHeaders: "",
+        httpHookHeaders: defaultHTTPHookHeaders,
         httpHookPayload: .meetingNotes
       )
     }
@@ -389,9 +395,8 @@ actor RemoteSyncService {
     request.httpMethod = "POST"
     request.timeoutInterval = 30
     request.setValue("text/markdown; charset=utf-8", forHTTPHeaderField: "Content-Type")
-    request.setValue(document.fileName, forHTTPHeaderField: "X-Meeting-Notes-File")
-    if let meetingPath = document.meetingPath {
-      request.setValue(meetingPath, forHTTPHeaderField: "X-Meeting-Notes-Meeting")
+    for (name, value) in document.metadataHeaders {
+      request.setValue(value, forHTTPHeaderField: name)
     }
     // User headers win, so Content-Type and friends can be overridden.
     for header in Configuration.parseHookHeaders(config.httpHookHeaders) {
@@ -414,7 +419,48 @@ actor RemoteSyncService {
   private struct HTTPHookDocument {
     let fileName: String
     let body: String
-    let meetingPath: String?
+    let metadataHeaders: [(String, String)]
+  }
+
+  /// Header values must stay on one line and within ASCII. Anything else is
+  /// percent-encoded so a meeting title with accents or emoji still travels.
+  static func sanitizedHeaderValue(_ value: String) -> String {
+    let flattened = value
+      .replacingOccurrences(of: "\r", with: " ")
+      .replacingOccurrences(of: "\n", with: " ")
+      .trimmingCharacters(in: .whitespaces)
+    guard !flattened.allSatisfy({ $0.isASCII }) else { return flattened }
+    let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -._~:/?#[]@!$&'()*+,;="))
+    return flattened.addingPercentEncoding(withAllowedCharacters: allowed) ?? flattened
+  }
+
+  /// The metadata every request carries, so a receiver can file the document
+  /// without parsing the Markdown first.
+  static func metadataHeaders(
+    fileName: String, meetingPath: String?, meeting: MeetingDocument?
+  ) -> [(String, String)] {
+    let formatter = ISO8601DateFormatter()
+    var headers: [(String, String)] = [("X-Meeting-Notes-File", fileName)]
+    if let meetingPath { headers.append(("X-Meeting-Notes-Folder", meetingPath)) }
+    guard let meeting else { return headers }
+    headers.append(("X-Meeting-Notes-Id", meeting.id.uuidString))
+    headers.append(("X-Meeting-Notes-Title", sanitizedHeaderValue(meeting.title)))
+    headers.append(("X-Meeting-Notes-Started-At", formatter.string(from: meeting.startedAt)))
+    if let endedAt = meeting.endedAt {
+      headers.append(("X-Meeting-Notes-Ended-At", formatter.string(from: endedAt)))
+      let duration = Int(endedAt.timeIntervalSince(meeting.startedAt).rounded())
+      if duration >= 0 {
+        headers.append(("X-Meeting-Notes-Duration-Seconds", String(duration)))
+      }
+    }
+    let participants = (meeting.calendar?.participants ?? []).map(\.name)
+      .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    if !participants.isEmpty {
+      headers.append(
+        ("X-Meeting-Notes-Participants", sanitizedHeaderValue(participants.joined(separator: ", ")))
+      )
+    }
+    return headers
   }
 
   private func httpHookDocument(
@@ -426,7 +472,8 @@ actor RemoteSyncService {
       return HTTPHookDocument(
         fileName: fileName,
         body: "# Meeting Notes test\n\nThis is a test request from Meeting Notes.\n",
-        meetingPath: nil)
+        metadataHeaders: Self.metadataHeaders(
+          fileName: fileName, meetingPath: nil, meeting: nil))
     }
     let file = folder.appending(path: fileName)
     guard let body = try? String(contentsOf: file, encoding: .utf8) else {
@@ -434,10 +481,15 @@ actor RemoteSyncService {
       // example a purged transcript), is not a failure worth retrying.
       return nil
     }
+    let meeting = (try? Data(contentsOf: folder.appending(path: "meeting.json")))
+      .flatMap { try? JSONDecoder.meetingDecoder.decode(MeetingDocument.self, from: $0) }
     return HTTPHookDocument(
       fileName: fileName,
       body: body,
-      meetingPath: folder.pathComponents.suffix(4).joined(separator: "/"))
+      metadataHeaders: Self.metadataHeaders(
+        fileName: fileName,
+        meetingPath: folder.pathComponents.suffix(4).joined(separator: "/"),
+        meeting: meeting))
   }
 
   static func isSafeMeetingPath(_ path: String) -> Bool {
