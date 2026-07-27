@@ -209,19 +209,8 @@ final class AppModel {
   }
 
   func persistCodexSummaryMessageDraft() {
-    guard !codexSummaryMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      codexSummaryMessageStatusText = "The message cannot be empty."
-      return
-    }
     CodexPromptSettingsStore.saveSummaryMessage(codexSummaryMessageDraft)
-    if codexSummaryMessageStatusText == "The message cannot be empty." {
-      codexSummaryMessageStatusText = ""
-    }
-  }
-
-  func restoreDefaultCodexSummaryMessage() {
-    codexSummaryMessageDraft = CodexPromptSettingsStore.restoreDefaultSummaryMessage()
-    codexSummaryMessageStatusText = "Default message restored."
+    codexSummaryMessageStatusText = ""
   }
 
   func setCodexSummaryMessageEnabled(_ enabled: Bool) {
@@ -855,12 +844,14 @@ final class AppModel {
   /// Runs only when the task already exists; posts without triggering a reply.
   private func notifyCodexSummaryReady(meetingID: UUID) async {
     guard codexSummaryMessageEnabled else { return }
+    let template = CodexPromptSettingsStore.loadSummaryMessage()
+    guard !template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     do {
       let (document, folder) = try await store.completedMeeting(id: meetingID)
       guard let threadID = document.codexThreadID, !threadID.isEmpty else { return }
       guard let context = codexContext(document: document, folder: folder) else { return }
       let message = CodexThreadService.renderTemplate(
-        CodexPromptSettingsStore.loadSummaryMessage(),
+        template,
         context: context,
         summary: document.insights?.summary)
       try await CodexThreadService.sendMessage(message, toThread: threadID)

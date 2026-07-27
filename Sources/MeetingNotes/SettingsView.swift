@@ -302,18 +302,21 @@ private struct CodexSettingsPane: View {
 
         Divider()
 
-        VStack(alignment: .leading, spacing: 8) {
-          Toggle(isOn: Binding(
+        HStack(spacing: 16) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Create tasks automatically")
+              .font(.body.weight(.medium))
+            Text("Start a Codex task in the background whenever a recording begins.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          Spacer()
+          Toggle("Create tasks automatically", isOn: Binding(
             get: { model.codexAutoCreateThreads },
             set: { model.setCodexAutoCreateThreads($0) }
-          )) {
-            VStack(alignment: .leading, spacing: 2) {
-              Text("Create tasks automatically")
-              Text("Start a Codex task in the background whenever a recording begins.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-          }
+          ))
+          .labelsHidden()
           .toggleStyle(.switch)
         }
 
@@ -358,49 +361,61 @@ private struct CodexSettingsPane: View {
 
         Divider()
 
-        VStack(alignment: .leading, spacing: 8) {
-          Toggle(isOn: Binding(
-            get: { model.codexSummaryMessageEnabled },
-            set: { model.setCodexSummaryMessageEnabled($0) }
-          )) {
-            VStack(alignment: .leading, spacing: 2) {
-              Text("Notify the task when notes are ready")
-              Text("Posts a message into the meeting's existing Codex task after the summary is created.")
+        VStack(alignment: .leading, spacing: 12) {
+          HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Run a task after the notes are ready")
+                .font(.body.weight(.medium))
+              Text("Sends your instruction to the meeting's Codex task and lets it do the work.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
+            Spacer()
+            Toggle("Run a task after the notes are ready", isOn: Binding(
+              get: { model.codexSummaryMessageEnabled },
+              set: { model.setCodexSummaryMessageEnabled($0) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
           }
-          .toggleStyle(.switch)
 
           if model.codexSummaryMessageEnabled {
-            TextEditor(text: $model.codexSummaryMessageDraft)
-              .font(.system(.body, design: .monospaced))
-              .scrollContentBackground(.hidden)
-              .padding(8)
-              .frame(height: 140)
-              .background(
-                Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-              .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                  .stroke(Color(nsColor: .separatorColor))
-              }
-              .onChange(of: model.codexSummaryMessageDraft) {
-                model.persistCodexSummaryMessageDraft()
-              }
+            ZStack(alignment: .topLeading) {
+              TextEditor(text: $model.codexSummaryMessageDraft)
+                .font(.system(.body, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .frame(height: 140)
+                .background(
+                  Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                  RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(nsColor: .separatorColor))
+                }
+                .onChange(of: model.codexSummaryMessageDraft) {
+                  model.persistCodexSummaryMessageDraft()
+                }
 
-            Text("Placeholders also include {{summary}} — the finished meeting summary text.")
+              if model.codexSummaryMessageDraft.isEmpty {
+                Text(CodexThreadService.summaryMessagePlaceholder)
+                  .font(.system(.body, design: .monospaced))
+                  .foregroundStyle(.tertiary)
+                  .padding(.horizontal, 13)
+                  .padding(.vertical, 16)
+                  .allowsHitTesting(false)
+              }
+            }
+
+            Text("Leave empty to do nothing. Placeholders also include {{summary}} — the finished meeting summary text.")
               .font(.caption)
               .foregroundStyle(.secondary)
               .textSelection(.enabled)
 
-            HStack {
-              if !model.codexSummaryMessageStatusText.isEmpty {
-                Text(model.codexSummaryMessageStatusText)
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
-              }
-              Spacer()
-              Button("Restore Default", action: model.restoreDefaultCodexSummaryMessage)
+            if !model.codexSummaryMessageStatusText.isEmpty {
+              Text(model.codexSummaryMessageStatusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
           }
         }

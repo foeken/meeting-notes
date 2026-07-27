@@ -112,13 +112,14 @@ enum CodexThreadService {
     Briefly confirm which meeting artifact you used and that you are ready. Do not summarize the meeting unless I ask.
     """
 
-  static let defaultSummaryMessageTemplate = """
-    The final notes for “{{meeting_title}}” are ready.
+  /// Empty by default: the follow-up work a meeting should trigger is personal,
+  /// so nothing runs until the user writes their own instruction.
+  static let defaultSummaryMessageTemplate = ""
 
-    Re-read `meeting.md` in {{meeting_folder}} — it now contains the structured summary. \
-    `transcript.md` holds the full timestamped evidence.
+  static let summaryMessagePlaceholder = """
+    Extract the tasks and send them to my task manager.
 
-    Treat this as updated context. Wait for my next question before responding.
+    Other ideas: send meeting.md to HubSpot, or save the notes in Slite.
     """
 
   enum ServiceError: LocalizedError {
@@ -127,6 +128,7 @@ enum CodexThreadService {
     case protocolError(String)
     case processExited(String)
     case timedOut
+    case turnFailed(String)
 
     var errorDescription: String? {
       switch self {
@@ -140,6 +142,8 @@ enum CodexThreadService {
         detail.isEmpty ? "Codex stopped before the task was created." : detail
       case .timedOut:
         "Codex did not respond in time. Please try again."
+      case .turnFailed(let detail):
+        detail.isEmpty ? "The Codex task could not finish its work." : detail
       }
     }
   }
@@ -228,6 +232,25 @@ enum CodexThreadService {
     return item["type"] as? String == "userMessage"
   }
 
+  /// Recognizes the end of a turn. `turn/completed` carries the finished turn;
+  /// `turn/failed` carries the reason the task could not finish.
+  static func turnOutcome(
+    _ object: [String: Any], threadID: String, turnID: String
+  ) -> Result<Void, ServiceError>? {
+    guard let method = object["method"] as? String,
+      method == "turn/completed" || method == "turn/failed",
+      let params = object["params"] as? [String: Any],
+      params["threadId"] as? String == threadID
+    else { return nil }
+    let turn = params["turn"] as? [String: Any]
+    if let eventTurnID = turn?["id"] as? String ?? params["turnId"] as? String,
+      eventTurnID != turnID
+    { return nil }
+    if method == "turn/completed" { return .success(()) }
+    let error = (params["error"] as? [String: Any]) ?? (turn?["error"] as? [String: Any])
+    return .failure(.turnFailed(error?["message"] as? String ?? ""))
+  }
+
   static func createThread(
     for context: CodexMeetingContext,
     promptTemplate: String = defaultPromptTemplate
@@ -310,7 +333,12 @@ enum CodexThreadService {
   /// generation, mirroring how the initial meeting context is preloaded:
   /// resume the thread, start a turn with the message, wait until the user
   /// message is visible, then interrupt.
-  static func sendMessage(_ message: String, toThread threadID: String) async throws {
+  /// Sends a message to an existing Codex task and lets the task actually work
+  /// on it. Unlike the meeting-context preload, this turn runs to completion,
+  /// so the instruction (extract tasks, file notes elsewhere, …) is carried out.
+  static func sendMessage(
+    _ message: String, toThread threadID: String, timeout: TimeInterval = 900
+  ) async throws {
     guard let executable = executableURL() else { throw ServiceError.appNotInstalled }
 
     try await withCheckedThrowingContinuation {
@@ -318,7 +346,7 @@ enum CodexThreadService {
       DispatchQueue.global(qos: .utility).async {
         do {
           let connection = try CodexRPCConnection(executable: executable)
-          connection.startDeadline(seconds: 30)
+          connection.startDeadline(seconds: timeout)
           defer { connection.cancelDeadline() }
           try connection.sendRequest(
             id: 1,
@@ -352,12 +380,7 @@ enum CodexThreadService {
             let turnID = turn["id"] as? String,
             !turnID.isEmpty
           else { throw ServiceError.protocolError("Codex returned no turn ID.") }
-          try connection.waitUntilUserMessageStarts(threadID: threadID)
-          try connection.sendRequest(
-            id: 4,
-            method: "turn/interrupt",
-            params: ["threadId": threadID, "turnId": turnID])
-          _ = try connection.response(id: 4)
+          try connection.waitUntilTurnFinishes(threadID: threadID, turnID: turnID)
           continuation.resume()
         } catch {
           continuation.resume(throwing: error)
@@ -369,9 +392,11 @@ enum CodexThreadService {
 }
 
 private final class CodexRPCConnection {
-  /// Only notification methods that `waitUntilUserMessageStarts` matches on are
-  /// worth buffering; everything else (deltas, token counts, …) is dropped.
-  private static let bufferedNotificationMethods: Set<String> = ["item/started"]
+  /// Only notification methods the waiters match on are worth buffering;
+  /// everything else (deltas, token counts, …) is dropped.
+  private static let bufferedNotificationMethods: Set<String> = [
+    "item/started", "turn/completed", "turn/failed",
+  ]
   private static let maxBufferedNotifications = 64
 
   private let process: Process
@@ -471,6 +496,30 @@ private final class CodexRPCConnection {
     while process.isRunning {
       let object = try nextNotificationObject()
       if CodexThreadService.isVisibleUserMessageEvent(object, threadID: threadID) { return }
+    }
+    if hasTimedOut { throw CodexThreadService.ServiceError.timedOut }
+    throw CodexThreadService.ServiceError.processExited("")
+  }
+
+  /// Waits for the running turn to finish so the task's work actually happens.
+  func waitUntilTurnFinishes(threadID: String, turnID: String) throws {
+    if let index = pendingNotifications.firstIndex(where: {
+      CodexThreadService.turnOutcome($0, threadID: threadID, turnID: turnID) != nil
+    }) {
+      let object = pendingNotifications.remove(at: index)
+      if let outcome = CodexThreadService.turnOutcome(
+        object, threadID: threadID, turnID: turnID)
+      {
+        return try outcome.get()
+      }
+    }
+    while process.isRunning {
+      let object = try nextNotificationObject()
+      if let outcome = CodexThreadService.turnOutcome(
+        object, threadID: threadID, turnID: turnID)
+      {
+        return try outcome.get()
+      }
     }
     if hasTimedOut { throw CodexThreadService.ServiceError.timedOut }
     throw CodexThreadService.ServiceError.processExited("")

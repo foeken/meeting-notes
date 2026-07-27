@@ -23,10 +23,8 @@ enum CodexPromptSettingsStore {
   }
 
   static func loadSummaryMessage(from defaults: UserDefaults = .standard) -> String {
-    guard let stored = defaults.string(forKey: summaryMessageKey),
-      !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else { return CodexThreadService.defaultSummaryMessageTemplate }
-    return stored
+    defaults.string(forKey: summaryMessageKey)
+      ?? CodexThreadService.defaultSummaryMessageTemplate
   }
 
   static func saveSummaryMessage(_ template: String, to defaults: UserDefaults = .standard) {
@@ -39,7 +37,7 @@ enum CodexPromptSettingsStore {
   }
 
   static func summaryMessageEnabled(from defaults: UserDefaults = .standard) -> Bool {
-    defaults.object(forKey: summaryMessageEnabledKey) as? Bool ?? true
+    defaults.object(forKey: summaryMessageEnabledKey) as? Bool ?? false
   }
 
   static func saveSummaryMessageEnabled(_ enabled: Bool, to defaults: UserDefaults = .standard) {

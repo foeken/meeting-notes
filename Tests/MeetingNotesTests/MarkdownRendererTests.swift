@@ -86,18 +86,37 @@ import Testing
   let threadURL = try #require(CodexThreadService.threadURL("thread-123"))
   #expect(threadURL.absoluteString == "codex://threads/thread-123")
 
-  let summaryMessage = CodexThreadService.renderTemplate(
-    CodexThreadService.defaultSummaryMessageTemplate, context: context)
-  #expect(summaryMessage.contains("Portfolio review"))
-  #expect(summaryMessage.contains("Re-read `meeting.md`"))
-  #expect(summaryMessage.contains("/Users/test/Meeting Notes/2026/01/01/review"))
-  #expect(summaryMessage.contains("Wait for my next question"))
+  // The post-meeting instruction is personal, so nothing is sent by default.
+  #expect(CodexThreadService.defaultSummaryMessageTemplate.isEmpty)
+  #expect(CodexThreadService.summaryMessagePlaceholder.contains("task manager"))
 
   let customMessage = CodexThreadService.renderTemplate(
     "Notes ready for {{meeting_title}}: {{summary}}",
     context: context,
     summary: "We agreed to ship.")
   #expect(customMessage == "Notes ready for Portfolio review: We agreed to ship.")
+
+  let completed: [String: Any] = [
+    "method": "turn/completed",
+    "params": ["threadId": "thread-123", "turn": ["id": "turn-9", "status": "completed"]],
+  ]
+  let outcome = try #require(
+    CodexThreadService.turnOutcome(completed, threadID: "thread-123", turnID: "turn-9"))
+  #expect((try? outcome.get()) != nil)
+  #expect(
+    CodexThreadService.turnOutcome(completed, threadID: "thread-123", turnID: "other") == nil)
+
+  let failed: [String: Any] = [
+    "method": "turn/failed",
+    "params": [
+      "threadId": "thread-123",
+      "turn": ["id": "turn-9"],
+      "error": ["message": "sandbox denied"],
+    ],
+  ]
+  let failure = try #require(
+    CodexThreadService.turnOutcome(failed, threadID: "thread-123", turnID: "turn-9"))
+  #expect((try? failure.get()) == nil)
 
   let startParams = CodexThreadService.threadStartParams(for: context)
   #expect(startParams["cwd"] as? String == "/Users/test/Meeting Notes")
