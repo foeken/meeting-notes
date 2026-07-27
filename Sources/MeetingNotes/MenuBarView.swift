@@ -5,6 +5,7 @@ struct MenuBarView: View {
   @Bindable var model: AppModel
   @Environment(\.openSettings) private var openSettings
   @Environment(\.openWindow) private var openWindow
+  @State private var optionKey = OptionKeyMonitor()
 
   private static let todayTimeFormatter: DateFormatter = {
     let formatter = DateFormatter()
@@ -58,6 +59,8 @@ struct MenuBarView: View {
     .background(.ultraThinMaterial)
     .animation(.easeOut(duration: 0.16), value: model.meetingPendingDeletion?.id)
     .onExitCommand(perform: model.cancelMeetingDeletion)
+    .onAppear { optionKey.start() }
+    .onDisappear { optionKey.stop() }
   }
 
   private func deletionConfirmation(for meeting: TodayMeetingSummary) -> some View {
@@ -182,12 +185,19 @@ struct MenuBarView: View {
           .foregroundStyle(.secondary)
         Spacer()
         if model.state == .recording || model.state == .paused {
-          Button(action: model.discussCurrentMeetingInCodex) {
-            CodexActionButtonLabel(isLoading: model.codexLaunchingCurrentMeeting)
+          Button {
+            model.discussCurrentMeetingInCodex(startNewTask: optionKey.isPressed)
+          } label: {
+            CodexActionButtonLabel(
+              isLoading: model.codexLaunchingCurrentMeeting,
+              isAlternate: optionKey.isPressed)
           }
           .buttonStyle(.plain)
           .disabled(model.codexLaunchingCurrentMeeting)
-          .help("Discuss this meeting in Codex")
+          .help(
+            optionKey.isPressed
+              ? "Start a new Codex task for this meeting"
+              : "Discuss this meeting in Codex (hold Option for a new task)")
         }
       }
       HStack(spacing: 10) {
@@ -341,16 +351,21 @@ struct MenuBarView: View {
               .frame(maxWidth: .infinity, alignment: .leading)
               Spacer(minLength: 4)
               Button {
-                model.discussMeetingInCodex(meeting)
+                model.discussMeetingInCodex(meeting, startNewTask: optionKey.isPressed)
               } label: {
-                CodexIconButtonLabel(isLoading: model.codexLaunchingMeetingID == meeting.id)
+                CodexIconButtonLabel(
+                  isLoading: model.codexLaunchingMeetingID == meeting.id,
+                  isAlternate: optionKey.isPressed)
               }
               .buttonStyle(.plain)
               .disabled(
                 !model.canManageMeetings || model.codexLaunchingMeetingID != nil
                   || model.isMeetingFinalizing(meeting) || model.isMeetingRecoverable(meeting)
               )
-              .help("Discuss in Codex")
+              .help(
+                optionKey.isPressed
+                  ? "Start a new Codex task for this meeting"
+                  : "Discuss in Codex (hold Option for a new task)")
               Menu {
                 if model.isMeetingFinalizing(meeting) {
                   Button("Finalizing…", systemImage: "waveform") {}

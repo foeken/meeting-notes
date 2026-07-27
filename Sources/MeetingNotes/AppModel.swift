@@ -886,7 +886,9 @@ final class AppModel {
     }
   }
 
-  func discussCurrentMeetingInCodex() {
+  /// `startNewTask` forgets the meeting's stored task and creates a fresh one.
+  /// The previous Codex task is left untouched; only this app's link is reset.
+  func discussCurrentMeetingInCodex(startNewTask: Bool = false) {
     guard state == .recording || state == .paused, !codexLaunchingCurrentMeeting else { return }
     codexLaunchingCurrentMeeting = true
     Task {
@@ -895,18 +897,18 @@ final class AppModel {
         reportError("Could not find the current meeting folder.")
         return
       }
-      await openMeetingInCodex(document: document, folder: folder)
+      await openMeetingInCodex(document: document, folder: folder, startNewTask: startNewTask)
     }
   }
 
-  func discussMeetingInCodex(_ meeting: TodayMeetingSummary) {
+  func discussMeetingInCodex(_ meeting: TodayMeetingSummary, startNewTask: Bool = false) {
     guard state == .idle, codexLaunchingMeetingID == nil else { return }
     codexLaunchingMeetingID = meeting.id
     Task {
       defer { codexLaunchingMeetingID = nil }
       do {
         let (document, folder) = try await store.completedMeeting(id: meeting.id)
-        await openMeetingInCodex(document: document, folder: folder)
+        await openMeetingInCodex(document: document, folder: folder, startNewTask: startNewTask)
       } catch {
         reportError("Could not open the meeting in Codex: \(error.localizedDescription)")
       }
@@ -941,8 +943,11 @@ final class AppModel {
       meetingFolder: archivedMeetingFolder)
   }
 
-  private func openMeetingInCodex(document: MeetingDocument, folder: URL) async {
-    if let threadID = document.codexThreadID, !threadID.isEmpty,
+  private func openMeetingInCodex(
+    document: MeetingDocument, folder: URL, startNewTask: Bool = false
+  ) async {
+    let hadTask = !(document.codexThreadID ?? "").isEmpty
+    if !startNewTask, let threadID = document.codexThreadID, !threadID.isEmpty,
       let url = CodexThreadService.threadURL(threadID)
     {
       NSWorkspace.shared.open(url)
@@ -955,7 +960,7 @@ final class AppModel {
       return
     }
     await remoteSync.flush()
-    statusText = "Creating Codex task…"
+    statusText = hadTask ? "Starting a new Codex task…" : "Creating Codex task…"
     do {
       let threadID = try await CodexThreadService.createThread(
         for: context,
@@ -965,7 +970,10 @@ final class AppModel {
         throw CodexThreadService.ServiceError.protocolError("The task link was invalid.")
       }
       NSWorkspace.shared.open(url)
-      showTransientStatus("Codex task created for this meeting")
+      showTransientStatus(
+        hadTask
+          ? "New Codex task created; the earlier one is no longer linked"
+          : "Codex task created for this meeting")
       await remoteSync.flush()
       showCodexProjectHintIfNeeded(projectFolder: context.projectFolder)
     } catch {
