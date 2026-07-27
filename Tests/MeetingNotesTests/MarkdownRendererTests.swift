@@ -126,6 +126,25 @@ import Testing
   #expect(startParams["cwd"] as? String == "/Users/test/Meeting Notes")
   #expect(startParams["runtimeWorkspaceRoots"] == nil)
   #expect(startParams["ephemeral"] as? Bool == false)
+  // No model configured means Codex keeps deciding, as before.
+  #expect(startParams["model"] == nil)
+  #expect(startParams["config"] == nil)
+
+  let chosen = CodexThreadService.threadStartParams(
+    for: context, model: "gpt-5.6-terra", reasoningEffort: "high")
+  #expect(chosen["model"] as? String == "gpt-5.6-terra")
+  #expect((chosen["config"] as? [String: Any])?["model_reasoning_effort"] as? String == "high")
+
+  // A model without an effort leaves the effort to Codex.
+  let modelOnly = CodexThreadService.threadStartParams(
+    for: context, model: "gpt-5.6-terra", reasoningEffort: "")
+  #expect(modelOnly["model"] as? String == "gpt-5.6-terra")
+  #expect(modelOnly["config"] == nil)
+
+  // A blank model must never be sent as an empty string.
+  let blank = CodexThreadService.threadStartParams(
+    for: context, model: "  ", reasoningEffort: "high")
+  #expect(blank["model"] == nil)
 
   let turnInput = CodexThreadService.turnInput(for: context)
   #expect(turnInput["type"] as? String == "text")

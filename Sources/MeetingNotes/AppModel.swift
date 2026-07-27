@@ -93,6 +93,11 @@ final class AppModel {
   var codexSummaryMessageEnabled = CodexPromptSettingsStore.summaryMessageEnabled()
   var codexSummaryMessageStatusText = ""
   var codexAutoCreateThreads = CodexPromptSettingsStore.autoCreateThreads()
+  var codexModel = CodexPromptSettingsStore.loadModel()
+  var codexReasoningEffort = CodexPromptSettingsStore.loadReasoningEffort()
+  var codexAvailableModels: [CodexModelChoice] = []
+  var codexModelsLoading = false
+  var codexModelStatusText = ""
 
   var tanaSupertagChoices: [TanaSupertagChoice] {
     TanaSupertagChoice.selectedFirst(
@@ -251,6 +256,48 @@ final class AppModel {
     guard codexAutoCreateThreads != enabled else { return }
     codexAutoCreateThreads = enabled
     CodexPromptSettingsStore.saveAutoCreateThreads(enabled)
+  }
+
+  /// The model list comes from the local Codex app-server, so it always
+  /// matches what Codex itself offers instead of a hardcoded copy.
+  func refreshCodexModels() {
+    guard !codexModelsLoading else { return }
+    codexModelsLoading = true
+    codexModelStatusText = ""
+    Task {
+      defer { codexModelsLoading = false }
+      do {
+        codexAvailableModels = try await CodexThreadService.availableModels()
+        // A model that disappeared from Codex would silently break task
+        // creation, so fall back to Codex's own default instead.
+        if !codexModel.isEmpty,
+          !codexAvailableModels.contains(where: { $0.id == codexModel })
+        {
+          codexModelStatusText = "\(codexModel) is no longer available; using the Codex default."
+          setCodexModel("")
+        }
+      } catch {
+        codexModelStatusText = error.localizedDescription
+      }
+    }
+  }
+
+  func setCodexModel(_ model: String) {
+    codexModel = model
+    CodexPromptSettingsStore.saveModel(model)
+    let efforts = codexAvailableModels.first(where: { $0.id == model })?.reasoningEfforts ?? []
+    if !codexReasoningEffort.isEmpty, !efforts.contains(codexReasoningEffort) {
+      setCodexReasoningEffort("")
+    }
+  }
+
+  func setCodexReasoningEffort(_ effort: String) {
+    codexReasoningEffort = effort
+    CodexPromptSettingsStore.saveReasoningEffort(effort)
+  }
+
+  var codexReasoningEffortChoices: [String] {
+    codexAvailableModels.first(where: { $0.id == codexModel })?.reasoningEfforts ?? []
   }
 
   func setRemoveFillerWords(_ enabled: Bool) {
@@ -964,7 +1011,9 @@ final class AppModel {
     do {
       let threadID = try await CodexThreadService.createThread(
         for: context,
-        promptTemplate: CodexPromptSettingsStore.load())
+        promptTemplate: CodexPromptSettingsStore.load(),
+        model: CodexPromptSettingsStore.loadModel(),
+        reasoningEffort: CodexPromptSettingsStore.loadReasoningEffort())
       try await store.setCodexThreadID(threadID, for: document.id)
       guard let url = CodexThreadService.threadURL(threadID) else {
         throw CodexThreadService.ServiceError.protocolError("The task link was invalid.")
@@ -992,7 +1041,9 @@ final class AppModel {
       do {
         let threadID = try await CodexThreadService.createThread(
           for: context,
-          promptTemplate: CodexPromptSettingsStore.load())
+          promptTemplate: CodexPromptSettingsStore.load(),
+          model: CodexPromptSettingsStore.loadModel(),
+          reasoningEffort: CodexPromptSettingsStore.loadReasoningEffort())
         try await store.setCodexThreadID(threadID, for: document.id)
       } catch {
         // Auto-creation is best-effort; the Discuss button remains available.
