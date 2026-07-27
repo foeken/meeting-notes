@@ -5,6 +5,8 @@ enum CodexPromptSettingsStore {
   private static let summaryMessageKey = "codexSummaryMessageTemplate"
   private static let summaryMessageEnabledKey = "codexSummaryMessageEnabled"
   private static let autoCreateThreadsKey = "codexAutoCreateThreads"
+  private static let modelKey = "codexTaskModel"
+  private static let reasoningEffortKey = "codexTaskReasoningEffort"
 
   static func load(from defaults: UserDefaults = .standard) -> String {
     guard let stored = defaults.string(forKey: key),
@@ -50,5 +52,23 @@ enum CodexPromptSettingsStore {
 
   static func saveAutoCreateThreads(_ enabled: Bool, to defaults: UserDefaults = .standard) {
     defaults.set(enabled, forKey: autoCreateThreadsKey)
+  }
+
+  /// An empty model means "let Codex decide", which matches the behaviour
+  /// before the model could be chosen.
+  static func loadModel(from defaults: UserDefaults = .standard) -> String {
+    defaults.string(forKey: modelKey) ?? ""
+  }
+
+  static func saveModel(_ model: String, to defaults: UserDefaults = .standard) {
+    defaults.set(model, forKey: modelKey)
+  }
+
+  static func loadReasoningEffort(from defaults: UserDefaults = .standard) -> String {
+    defaults.string(forKey: reasoningEffortKey) ?? ""
+  }
+
+  static func saveReasoningEffort(_ effort: String, to defaults: UserDefaults = .standard) {
+    defaults.set(effort, forKey: reasoningEffortKey)
   }
 }

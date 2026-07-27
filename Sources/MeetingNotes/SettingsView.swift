@@ -323,6 +323,64 @@ private struct CodexSettingsPane: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
+            GridRow {
+              Text("Model")
+                .gridColumnAlignment(.trailing)
+              HStack(spacing: 8) {
+                Picker("Model", selection: Binding(
+                  get: { model.codexModel },
+                  set: { model.setCodexModel($0) }
+                )) {
+                  Text("Codex default").tag("")
+                  ForEach(model.codexAvailableModels) { choice in
+                    Text(choice.displayName).tag(choice.id)
+                  }
+                }
+                .labelsHidden()
+                .fixedSize()
+
+                if model.codexModelsLoading {
+                  ProgressView().controlSize(.small)
+                }
+              }
+            }
+
+            if !model.codexReasoningEffortChoices.isEmpty {
+              GridRow {
+                Text("Reasoning")
+                  .gridColumnAlignment(.trailing)
+                Picker("Reasoning", selection: Binding(
+                  get: { model.codexReasoningEffort },
+                  set: { model.setCodexReasoningEffort($0) }
+                )) {
+                  Text("Model default").tag("")
+                  ForEach(model.codexReasoningEffortChoices, id: \.self) { effort in
+                    Text(effort.capitalized).tag(effort)
+                  }
+                }
+                .labelsHidden()
+                .fixedSize()
+              }
+            }
+          }
+          .controlSize(.large)
+
+          Text("New meeting tasks use this model. The list comes from Codex itself, so it stays current. Codex default lets Codex choose.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+          if !model.codexModelStatusText.isEmpty {
+            Text(model.codexModelStatusText)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Meeting task prompt")
             .font(.headline)
           Text("Sent when a new Codex task is created for a meeting. Existing tasks are not changed.")
@@ -416,6 +474,7 @@ private struct CodexSettingsPane: View {
       }
       .padding(28)
     }
+    .onAppear { model.refreshCodexModels() }
   }
 }
 

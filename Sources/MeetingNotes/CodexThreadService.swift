@@ -120,6 +120,12 @@ struct CodexMeetingContext: Sendable {
   let meetingFolder: URL
 }
 
+struct CodexModelChoice: Identifiable, Equatable, Sendable {
+  let id: String
+  let displayName: String
+  let reasoningEfforts: [String]
+}
+
 /// Tracks whether Option is held so a view can offer an alternate action.
 /// The popover does not receive key events while it is open, so this observes
 /// the modifier flags directly.
@@ -259,11 +265,79 @@ enum CodexThreadService {
   }
 
   static func threadStartParams(for context: CodexMeetingContext) -> [String: Any] {
-    [
+    threadStartParams(for: context, model: nil, reasoningEffort: nil)
+  }
+
+  /// Codex falls back to its own default model when `thread/start` omits one,
+  /// which is rarely the model the user actually works with. Sending the
+  /// chosen model (and its reasoning effort) keeps meeting tasks consistent
+  /// with the rest of their Codex setup.
+  static func threadStartParams(
+    for context: CodexMeetingContext,
+    model: String?,
+    reasoningEffort: String?
+  ) -> [String: Any] {
+    var params: [String: Any] = [
       "cwd": context.projectFolder.standardizedFileURL.path,
       "ephemeral": false,
       "threadSource": "appServer",
     ]
+    let cleanModel = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !cleanModel.isEmpty else { return params }
+    params["model"] = cleanModel
+    // A model without an explicit effort keeps Codex's own default effort.
+    let cleanEffort = reasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !cleanEffort.isEmpty {
+      params["config"] = ["model_reasoning_effort": cleanEffort]
+    }
+    return params
+  }
+
+  /// Asks the local app-server which models it offers, so Settings can show
+  /// real choices instead of a hardcoded list that drifts out of date.
+  static func availableModels() async throws -> [CodexModelChoice] {
+    guard let executable = executableURL() else { throw ServiceError.appNotInstalled }
+    return try await withCheckedThrowingContinuation {
+      (continuation: CheckedContinuation<[CodexModelChoice], Error>) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let connection = try CodexRPCConnection(executable: executable)
+          connection.startDeadline(seconds: 20)
+          defer { connection.cancelDeadline() }
+          try connection.sendRequest(
+            id: 1,
+            method: "initialize",
+            params: [
+              "clientInfo": [
+                "name": "meeting-notes",
+                "title": "Meeting Notes",
+                "version": "1",
+              ]
+            ])
+          _ = try connection.response(id: 1)
+          try connection.sendNotification(method: "initialized", params: [:])
+          try connection.sendRequest(id: 2, method: "model/list", params: [:])
+          let response = try connection.response(id: 2)
+          let result = response["result"] as? [String: Any]
+          let raw = (result?["models"] as? [[String: Any]])
+            ?? (result?["data"] as? [[String: Any]]) ?? []
+          let models = raw.compactMap { entry -> CodexModelChoice? in
+            guard let id = entry["id"] as? String, !id.isEmpty,
+              entry["hidden"] as? Bool != true
+            else { return nil }
+            let efforts = (entry["supportedReasoningEfforts"] as? [[String: Any]] ?? [])
+              .compactMap { $0["reasoningEffort"] as? String }
+            return CodexModelChoice(
+              id: id,
+              displayName: entry["displayName"] as? String ?? id,
+              reasoningEfforts: efforts)
+          }
+          continuation.resume(returning: models)
+        } catch {
+          continuation.resume(throwing: error)
+        }
+      }
+    }
   }
 
   static func turnInput(
@@ -306,7 +380,9 @@ enum CodexThreadService {
 
   static func createThread(
     for context: CodexMeetingContext,
-    promptTemplate: String = defaultPromptTemplate
+    promptTemplate: String = defaultPromptTemplate,
+    model: String? = nil,
+    reasoningEffort: String? = nil
   ) async throws -> String {
     var isDirectory: ObjCBool = false
     guard FileManager.default.fileExists(
@@ -338,7 +414,8 @@ enum CodexThreadService {
           try connection.sendRequest(
             id: 2,
             method: "thread/start",
-            params: threadStartParams(for: context))
+            params: threadStartParams(
+              for: context, model: model, reasoningEffort: reasoningEffort))
           let startResponse = try connection.response(id: 2)
           guard let result = startResponse["result"] as? [String: Any],
             let thread = result["thread"] as? [String: Any],
