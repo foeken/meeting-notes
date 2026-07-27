@@ -516,6 +516,11 @@ private struct StorageSettingsPane: View {
 private struct HookSettingsPane: View {
   @Bindable var model: AppModel
 
+  private static let headersPlaceholder = """
+    Authorization: Bearer sk-example-token
+    X-Source: Meeting Notes
+    """
+
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
@@ -605,14 +610,25 @@ private struct HookSettingsPane: View {
             GridRow {
               Text("Headers")
                 .gridColumnAlignment(.trailing)
-              GrowingTextEditor(text: $model.httpHookHeadersDraft, minHeight: 72)
-                .padding(2)
-                .background(
-                  Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                .overlay {
-                  RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(nsColor: .separatorColor))
+              ZStack(alignment: .topLeading) {
+                GrowingTextEditor(text: $model.httpHookHeadersDraft, minHeight: 72)
+                  .padding(2)
+                  .background(
+                    Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                  .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                      .stroke(Color(nsColor: .separatorColor))
+                  }
+
+                if model.httpHookHeadersDraft.isEmpty {
+                  Text(Self.headersPlaceholder)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 12)
+                    .allowsHitTesting(false)
                 }
+              }
             }
           }
         }
