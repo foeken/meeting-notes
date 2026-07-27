@@ -34,6 +34,7 @@ struct CodexAppIcon: View {
 
 struct CodexIconButtonLabel: View {
   let isLoading: Bool
+  var isAlternate = false
   @State private var isHovered = false
 
   var body: some View {
@@ -42,17 +43,33 @@ struct CodexIconButtonLabel: View {
         ProgressView()
           .controlSize(.small)
       } else {
-        CodexAppIcon(size: 16)
+        CodexAppIcon(size: 16, color: isAlternate ? .accentColor : nil)
       }
     }
     .frame(width: 28, height: 24)
     .background {
       RoundedRectangle(cornerRadius: 7, style: .continuous)
-        .fill(.primary.opacity(isHovered ? 0.12 : 0.06))
+        .fill(
+          isAlternate
+            ? AnyShapeStyle(Color.accentColor.opacity(isHovered ? 0.22 : 0.14))
+            : AnyShapeStyle(.primary.opacity(isHovered ? 0.12 : 0.06)))
     }
     .overlay {
       RoundedRectangle(cornerRadius: 7, style: .continuous)
-        .stroke(.primary.opacity(isHovered ? 0.18 : 0.10), lineWidth: 0.5)
+        .stroke(
+          isAlternate
+            ? AnyShapeStyle(Color.accentColor.opacity(0.45))
+            : AnyShapeStyle(.primary.opacity(isHovered ? 0.18 : 0.10)),
+          lineWidth: 0.5)
+    }
+    .overlay(alignment: .topTrailing) {
+      if isAlternate && !isLoading {
+        Image(systemName: "plus.circle.fill")
+          .font(.system(size: 9, weight: .bold))
+          .foregroundStyle(Color.accentColor)
+          .background(Color(nsColor: .windowBackgroundColor), in: Circle())
+          .offset(x: 3, y: -3)
+      }
     }
     .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     .onHover { isHovered = $0 }
@@ -61,6 +78,7 @@ struct CodexIconButtonLabel: View {
 
 struct CodexActionButtonLabel: View {
   let isLoading: Bool
+  var isAlternate = false
 
   var body: some View {
     HStack(spacing: 6) {
@@ -68,21 +86,29 @@ struct CodexActionButtonLabel: View {
         ProgressView()
           .controlSize(.small)
       } else {
-        CodexAppIcon(size: 15)
+        CodexAppIcon(size: 15, color: isAlternate ? .accentColor : nil)
       }
-      Text(isLoading ? "Opening…" : "Discuss")
+      Text(isLoading ? "Opening…" : (isAlternate ? "New task" : "Discuss"))
     }
     .font(.caption.weight(.semibold))
     .padding(.horizontal, 9)
     .frame(height: 28)
     .background {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(.primary.opacity(0.065))
+        .fill(
+          isAlternate
+            ? AnyShapeStyle(Color.accentColor.opacity(0.14))
+            : AnyShapeStyle(.primary.opacity(0.065)))
     }
     .overlay {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .stroke(.primary.opacity(0.11), lineWidth: 0.5)
+        .stroke(
+          isAlternate
+            ? AnyShapeStyle(Color.accentColor.opacity(0.45))
+            : AnyShapeStyle(.primary.opacity(0.11)),
+          lineWidth: 0.5)
     }
+    .animation(.easeOut(duration: 0.12), value: isAlternate)
   }
 }
 
@@ -92,6 +118,31 @@ struct CodexMeetingContext: Sendable {
   let startedAt: Date
   let projectFolder: URL
   let meetingFolder: URL
+}
+
+/// Tracks whether Option is held so a view can offer an alternate action.
+/// The popover does not receive key events while it is open, so this observes
+/// the modifier flags directly.
+@MainActor
+@Observable
+final class OptionKeyMonitor {
+  private(set) var isPressed = NSEvent.modifierFlags.contains(.option)
+  @ObservationIgnored private var monitor: Any?
+
+  func start() {
+    guard monitor == nil else { return }
+    isPressed = NSEvent.modifierFlags.contains(.option)
+    monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+      MainActor.assumeIsolated { self?.isPressed = event.modifierFlags.contains(.option) }
+      return event
+    }
+  }
+
+  func stop() {
+    if let monitor { NSEvent.removeMonitor(monitor) }
+    monitor = nil
+    isPressed = false
+  }
 }
 
 enum CodexThreadService {
