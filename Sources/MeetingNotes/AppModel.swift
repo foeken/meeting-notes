@@ -852,8 +852,7 @@ final class AppModel {
       guard let context = codexContext(document: document, folder: folder) else { return }
       let message = CodexThreadService.renderTemplate(
         template,
-        context: context,
-        summary: document.insights?.summary)
+        context: context)
       try await CodexThreadService.sendMessage(message, toThread: threadID)
     } catch {
       // Best-effort: the summary itself is already saved and synced.

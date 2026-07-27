@@ -185,16 +185,18 @@ enum CodexThreadService {
   }
 
   static func renderTemplate(
-    _ template: String, context: CodexMeetingContext, summary: String? = nil
+    _ template: String, context: CodexMeetingContext
   ) -> String {
     let dateFormatter = ISO8601DateFormatter()
+    // Only identifiers and paths are substituted. Whole documents (the
+    // summary, the transcript) stay in their files so the task reads them
+    // from disk instead of receiving a copy that can go stale.
     let replacements = [
       "{{meeting_title}}": context.title,
       "{{meeting_id}}": context.meetingID.uuidString,
       "{{meeting_date}}": dateFormatter.string(from: context.startedAt),
       "{{meeting_folder}}": context.meetingFolder.path,
       "{{project_folder}}": context.projectFolder.path,
-      "{{summary}}": summary ?? "",
     ]
     return replacements.reduce(template) { result, replacement in
       result.replacingOccurrences(of: replacement.key, with: replacement.value)

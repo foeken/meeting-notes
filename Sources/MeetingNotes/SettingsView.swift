@@ -401,7 +401,7 @@ private struct CodexSettingsPane: View {
               }
             }
 
-            Text("Leave empty to do nothing. Placeholders also include {{summary}} — the finished meeting summary text.")
+            Text("Leave empty to do nothing. The same placeholders are available: {{meeting_title}}, {{meeting_id}}, {{meeting_date}}, {{meeting_folder}}, {{project_folder}}.")
               .font(.caption)
               .foregroundStyle(.secondary)
               .textSelection(.enabled)

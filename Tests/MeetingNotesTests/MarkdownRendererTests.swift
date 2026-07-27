@@ -90,11 +90,15 @@ import Testing
   #expect(CodexThreadService.defaultSummaryMessageTemplate.isEmpty)
   #expect(CodexThreadService.summaryMessagePlaceholder.contains("task manager"))
 
+  // Names and paths are substituted; whole documents never are, so the task
+  // reads meeting.md from disk instead of receiving a copy.
   let customMessage = CodexThreadService.renderTemplate(
-    "Notes ready for {{meeting_title}}: {{summary}}",
-    context: context,
-    summary: "We agreed to ship.")
-  #expect(customMessage == "Notes ready for Portfolio review: We agreed to ship.")
+    "Notes ready for {{meeting_title}} in {{meeting_folder}}. Summary: {{summary}}",
+    context: context)
+  #expect(
+    customMessage
+      == "Notes ready for Portfolio review in /Users/test/Meeting Notes/2026/01/01/review. Summary: {{summary}}"
+  )
 
   let completed: [String: Any] = [
     "method": "turn/completed",
