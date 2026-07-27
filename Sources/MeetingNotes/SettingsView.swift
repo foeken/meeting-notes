@@ -39,8 +39,8 @@ struct SettingsView: View {
       .background(Color(nsColor: .windowBackgroundColor))
     }
     .frame(
-      minWidth: 780, idealWidth: 860, maxWidth: .infinity,
-      minHeight: 560, idealHeight: 640, maxHeight: .infinity)
+      minWidth: 640, idealWidth: 860, maxWidth: .infinity,
+      minHeight: 480, idealHeight: 640, maxHeight: .infinity)
     .background(SettingsWindowConfigurator())
     .onAppear { selection = .general }
   }
@@ -329,11 +329,8 @@ private struct CodexSettingsPane: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-          TextEditor(text: $model.codexPromptDraft)
-            .font(.system(.body, design: .monospaced))
-            .scrollContentBackground(.hidden)
-            .padding(8)
-            .frame(height: 300)
+          GrowingTextEditor(text: $model.codexPromptDraft, minHeight: 200)
+            .padding(2)
             .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
             .overlay {
               RoundedRectangle(cornerRadius: 8)
@@ -382,11 +379,8 @@ private struct CodexSettingsPane: View {
 
           if model.codexSummaryMessageEnabled {
             ZStack(alignment: .topLeading) {
-              TextEditor(text: $model.codexSummaryMessageDraft)
-                .font(.system(.body, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .frame(height: 140)
+              GrowingTextEditor(text: $model.codexSummaryMessageDraft, minHeight: 120)
+                .padding(2)
                 .background(
                   Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
                 .overlay {
@@ -402,7 +396,7 @@ private struct CodexSettingsPane: View {
                   .font(.system(.body, design: .monospaced))
                   .foregroundStyle(.tertiary)
                   .padding(.horizontal, 13)
-                  .padding(.vertical, 16)
+                  .padding(.vertical, 12)
                   .allowsHitTesting(false)
               }
             }
@@ -1275,6 +1269,85 @@ private struct SettingsWindowConfigurator: NSViewRepresentable {
   func updateNSView(_ view: NSView, context: Context) {}
 }
 
+/// A plain-text editor that reports its full content height instead of
+/// scrolling internally, so a settings pane shows one scrollbar rather than a
+/// scroll view nested inside another scroll view.
+private struct GrowingTextEditor: NSViewRepresentable {
+  @Binding var text: String
+  var minHeight: CGFloat = 120
+
+  final class Coordinator: NSObject, NSTextViewDelegate {
+    var parent: GrowingTextEditor
+    /// Height is measured with a private text stack. Measuring through the
+    /// live text container would leave it sized for measurement rather than
+    /// for the visible frame, and the editor would then draw over the
+    /// controls below it.
+    private let measuringStorage = NSTextStorage()
+    private let measuringLayout = NSLayoutManager()
+    private let measuringContainer = NSTextContainer()
+
+    init(_ parent: GrowingTextEditor) {
+      self.parent = parent
+      super.init()
+      measuringStorage.addLayoutManager(measuringLayout)
+      measuringLayout.addTextContainer(measuringContainer)
+      measuringContainer.lineFragmentPadding = 5
+    }
+
+    func measuredHeight(
+      text: String, font: NSFont, width: CGFloat, insets: NSSize
+    ) -> CGFloat {
+      // A trailing newline has no glyphs, so pad it to keep the caret's line.
+      let measured = text.isEmpty ? " " : (text.hasSuffix("\n") ? text + " " : text)
+      measuringContainer.size = NSSize(
+        width: max(1, width - insets.width * 2), height: .greatestFiniteMagnitude)
+      measuringStorage.setAttributedString(
+        NSAttributedString(string: measured, attributes: [.font: font]))
+      measuringLayout.ensureLayout(for: measuringContainer)
+      return measuringLayout.usedRect(for: measuringContainer).height + insets.height * 2
+    }
+
+    func textDidChange(_ notification: Notification) {
+      guard let textView = notification.object as? NSTextView else { return }
+      parent.text = textView.string
+    }
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+  func makeNSView(context: Context) -> NSTextView {
+    let textView = NSTextView()
+    textView.delegate = context.coordinator
+    textView.isRichText = false
+    textView.allowsUndo = true
+    textView.drawsBackground = false
+    textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+    textView.textContainerInset = NSSize(width: 6, height: 8)
+    textView.isVerticallyResizable = false
+    textView.isHorizontallyResizable = false
+    textView.textContainer?.widthTracksTextView = true
+    textView.textContainer?.heightTracksTextView = true
+    textView.string = text
+    return textView
+  }
+
+  func updateNSView(_ textView: NSTextView, context: Context) {
+    context.coordinator.parent = self
+    if textView.string != text { textView.string = text }
+  }
+
+  func sizeThatFits(
+    _ proposal: ProposedViewSize, nsView textView: NSTextView, context: Context
+  ) -> CGSize? {
+    guard let width = proposal.width, width > 0,
+      let font = textView.font
+    else { return nil }
+    let contentHeight = context.coordinator.measuredHeight(
+      text: text, font: font, width: width, insets: textView.textContainerInset)
+    return CGSize(width: width, height: max(minHeight, contentHeight.rounded(.up)))
+  }
+}
+
 private final class SettingsWindowHostView: NSView {
   private weak var configuredWindow: NSWindow?
 
@@ -1289,14 +1362,25 @@ private final class SettingsWindowHostView: NSView {
     window.title = "Meeting Notes Settings"
     window.titleVisibility = .hidden
     window.isMovableByWindowBackground = false
-    window.minSize = NSSize(width: 780, height: 560)
-    let sizingVersionKey = "settingsWindowSizingVersion"
-    if UserDefaults.standard.integer(forKey: sizingVersionKey) < 6 {
+    window.minSize = NSSize(width: 640, height: 480)
+    // The user may make the window as large as their display allows.
+    window.maxSize = NSSize(
+      width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+    if ProcessInfo.processInfo.arguments.contains("--ui-test") {
       window.setContentSize(NSSize(width: 860, height: 640))
       window.center()
-      if !ProcessInfo.processInfo.arguments.contains("--ui-test") {
-        UserDefaults.standard.set(6, forKey: sizingVersionKey)
+    } else {
+      // Remember whatever size and position the user leaves behind. The first
+      // launch after this change starts from a sensible default instead of the
+      // older, more cramped frame.
+      let autosaveName = "MeetingNotesSettingsWindow"
+      let seededKey = "settingsWindowFrameSeeded"
+      if !UserDefaults.standard.bool(forKey: seededKey) {
+        UserDefaults.standard.set(true, forKey: seededKey)
+        window.setContentSize(NSSize(width: 860, height: 640))
+        window.center()
       }
+      window.setFrameAutosaveName(autosaveName)
     }
     NSApp.activate(ignoringOtherApps: true)
     window.makeKeyAndOrderFront(nil)

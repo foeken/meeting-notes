@@ -162,7 +162,7 @@ struct MeetingNotesApp: App {
     Settings {
       SettingsView(model: model)
     }
-    .defaultSize(width: 780, height: 560)
+    .defaultSize(width: 860, height: 640)
     .windowResizability(.contentMinSize)
   }
 
