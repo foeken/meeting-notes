@@ -1071,6 +1071,24 @@ import Testing
   #expect(!RemoteSyncService.isSafeMeetingPath("2026/07/15"))
 }
 
+@Test func summaryModelDefaultsToTheChatGPTDefault() throws {
+  let suite = "MeetingNotesSummaryModelTests-\(UUID().uuidString)"
+  let defaults = try #require(UserDefaults(suiteName: suite))
+  defer { defaults.removePersistentDomain(forName: suite) }
+
+  // Empty means "let ChatGPT decide", so no model flag is forced.
+  #expect(CodexPromptSettingsStore.loadSummaryModel(from: defaults).isEmpty)
+  #expect(CodexPromptSettingsStore.loadSummaryReasoningEffort(from: defaults).isEmpty)
+
+  CodexPromptSettingsStore.saveSummaryModel("gpt-5.6-terra", to: defaults)
+  CodexPromptSettingsStore.saveSummaryReasoningEffort("high", to: defaults)
+  #expect(CodexPromptSettingsStore.loadSummaryModel(from: defaults) == "gpt-5.6-terra")
+  #expect(CodexPromptSettingsStore.loadSummaryReasoningEffort(from: defaults) == "high")
+
+  // The summary model is stored separately from the meeting-task model.
+  #expect(CodexPromptSettingsStore.loadModel(from: defaults).isEmpty)
+}
+
 @Test func freshArchiveSettingsAreLocalAndRoundTrip() throws {
   let suite = "MeetingNotesTests-\(UUID().uuidString)"
   let defaults = try #require(UserDefaults(suiteName: suite))

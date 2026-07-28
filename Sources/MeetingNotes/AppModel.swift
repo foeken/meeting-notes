@@ -95,6 +95,8 @@ final class AppModel {
   var codexAutoCreateThreads = CodexPromptSettingsStore.autoCreateThreads()
   var codexModel = CodexPromptSettingsStore.loadModel()
   var codexReasoningEffort = CodexPromptSettingsStore.loadReasoningEffort()
+  var summaryModel = CodexPromptSettingsStore.loadSummaryModel()
+  var summaryReasoningEffort = CodexPromptSettingsStore.loadSummaryReasoningEffort()
   var codexAvailableModels: [CodexModelChoice] = []
   var codexModelsLoading = false
   var codexModelStatusText = ""
@@ -273,8 +275,14 @@ final class AppModel {
         if !codexModel.isEmpty,
           !codexAvailableModels.contains(where: { $0.id == codexModel })
         {
-          codexModelStatusText = "\(codexModel) is no longer available; using the Codex default."
+          codexModelStatusText = "\(codexModel) is no longer available; using the ChatGPT default."
           setCodexModel("")
+        }
+        if !summaryModel.isEmpty,
+          !codexAvailableModels.contains(where: { $0.id == summaryModel })
+        {
+          codexModelStatusText = "\(summaryModel) is no longer available; using the ChatGPT default."
+          setSummaryModel("")
         }
       } catch {
         codexModelStatusText = error.localizedDescription
@@ -298,6 +306,24 @@ final class AppModel {
 
   var codexReasoningEffortChoices: [String] {
     codexAvailableModels.first(where: { $0.id == codexModel })?.reasoningEfforts ?? []
+  }
+
+  func setSummaryModel(_ model: String) {
+    summaryModel = model
+    CodexPromptSettingsStore.saveSummaryModel(model)
+    let efforts = codexAvailableModels.first(where: { $0.id == model })?.reasoningEfforts ?? []
+    if !summaryReasoningEffort.isEmpty, !efforts.contains(summaryReasoningEffort) {
+      setSummaryReasoningEffort("")
+    }
+  }
+
+  func setSummaryReasoningEffort(_ effort: String) {
+    summaryReasoningEffort = effort
+    CodexPromptSettingsStore.saveSummaryReasoningEffort(effort)
+  }
+
+  var summaryReasoningEffortChoices: [String] {
+    codexAvailableModels.first(where: { $0.id == summaryModel })?.reasoningEfforts ?? []
   }
 
   func setRemoveFillerWords(_ enabled: Bool) {

@@ -19,6 +19,7 @@ cp -R "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/Resources/CodexLogo.svg" "$APP/Contents/Resources/CodexLogo.svg"
+cp "$ROOT/Resources/OpenAILogo.svg" "$APP/Contents/Resources/OpenAILogo.svg"
 IDENTITY=${MEETING_NOTES_CODE_SIGN_IDENTITY:--}
 
 # Sign inside-out instead of using the deprecated `codesign --deep`: nested
