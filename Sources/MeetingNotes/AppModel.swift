@@ -275,13 +275,13 @@ final class AppModel {
         if !codexModel.isEmpty,
           !codexAvailableModels.contains(where: { $0.id == codexModel })
         {
-          codexModelStatusText = "\(codexModel) is no longer available; using the ChatGPT default."
+          codexModelStatusText = "\(codexModel) is no longer available; using the default model."
           setCodexModel("")
         }
         if !summaryModel.isEmpty,
           !codexAvailableModels.contains(where: { $0.id == summaryModel })
         {
-          codexModelStatusText = "\(summaryModel) is no longer available; using the ChatGPT default."
+          codexModelStatusText = "\(summaryModel) is no longer available; using the default model."
           setSummaryModel("")
         }
       } catch {

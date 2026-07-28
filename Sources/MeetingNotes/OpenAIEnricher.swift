@@ -226,7 +226,9 @@ actor OpenAIEnricher {
       openQuestions: evidence(generated.openQuestions),
       keyStatements: evidence(generated.keyStatements),
       generatedAt: Date(),
-      generator: model.isEmpty ? "ChatGPT default model" : "OpenAI \(model) via ChatGPT"
+      // With no model configured the bundled Codex CLI picks one, so the
+      // provenance must not claim a ChatGPT account default was used.
+      generator: model.isEmpty ? "Codex default model" : "OpenAI \(model) via Codex"
     )
   }
 
