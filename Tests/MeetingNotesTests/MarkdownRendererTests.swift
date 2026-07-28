@@ -563,8 +563,10 @@ import Testing
   let chunks = OpenAIEnricher.transcriptChunks(turns)
   #expect(chunks.count >= 2)
   #expect(chunks.allSatisfy { $0.count <= OpenAIEnricher.transcriptChunkCharacterLimit })
-  #expect(chunks.joined().contains("[00:00:00] Unknown:"))
-  #expect(chunks.joined().contains("[00:00:10] Unknown:"))
+  // Timestamps stay on every prompt line so the model can answer time-scoped
+  // questions. A real speaker name is still rendered when one exists.
+  #expect(chunks.joined().contains("[00:00:00] You:"))
+  #expect(chunks.joined().contains("[00:00:10] Speaker 1:"))
 }
 
 @Test func captureClockDoesNotCountPausedTime() async throws {
@@ -668,7 +670,12 @@ import Testing
     contentsOf: folder.appending(path: "transcript.md"), encoding: .utf8)
   #expect(!transcript.contains("Speaker S1"))
   #expect(!transcript.contains("Alex:"))
-  #expect(transcript.components(separatedBy: "Unknown:").count == 3)
+  // The placeholder speaker is no longer printed at all; timestamps remain so
+  // content stays locatable by time.
+  #expect(!transcript.contains("Unknown:"))
+  #expect(transcript.contains("[00:00:00]"))
+  #expect(transcript.contains("First"))
+  #expect(transcript.contains("Second"))
   let state = try String(
     contentsOf: folder.appending(path: "meeting.json"), encoding: .utf8)
   #expect(!state.contains("speakerNames"))
@@ -1069,6 +1076,89 @@ import Testing
   #expect(!RemoteSyncService.isSafeMeetingPath("../../important"))
   #expect(!RemoteSyncService.isSafeMeetingPath("2026/07/15/meeting with spaces"))
   #expect(!RemoteSyncService.isSafeMeetingPath("2026/07/15"))
+}
+
+@Test func transcriptFragmentsMergeIntoReadableTimestampedLines() {
+  // Real fragments from a Dutch meeting: the recognizer cut mid-word and lost
+  // the space at the seam ("gekre" + "gen", "la" + "ngs gaan").
+  let turns = [
+    TranscriptTurn(
+      start: 29, end: 30, speaker: "Unknown", text: "Johans had de lucht van gekre",
+      source: .microphone),
+    TranscriptTurn(
+      start: 30, end: 31, speaker: "Unknown", text: "gen gedacht<unk> was wij norf la",
+      source: .microphone),
+    TranscriptTurn(
+      start: 31, end: 32, speaker: "Unknown", text: "ngs gaan, kwam even laten",
+      source: .microphone),
+    TranscriptTurn(
+      start: 32, end: 33, speaker: "Unknown", text: "zien hoe wij het dan al doen",
+      source: .microphone),
+    TranscriptTurn(start: 33, end: 34, speaker: "Unknown", text: ".", source: .microphone),
+    // A gap past the merge window starts a new line.
+    TranscriptTurn(
+      start: 39, end: 40, speaker: "Unknown", text: "Ja, doel was", source: .microphone),
+    TranscriptTurn(
+      start: 40, end: 41, speaker: "Unknown", text: "vooral een beetje", source: .microphone),
+  ]
+
+  let lines = TranscriptFormatter.mergedLines(turns)
+  #expect(lines.count == 2)
+
+  // Mid-word splits are repaired rather than left as stutters.
+  #expect(lines[0].text.contains("gekregen"))
+  #expect(lines[0].text.contains("langs gaan"))
+  // The recognizer's unknown-token marker never reaches the file.
+  #expect(!lines[0].text.contains("<unk>"))
+  // A stray trailing period is attached, not left dangling on its own line.
+  #expect(lines[0].text.hasSuffix("."))
+  #expect(!lines[0].text.contains(" ."))
+  #expect(lines[1].text == "Ja, doel was vooral een beetje")
+
+  // Every line keeps its timestamp so "the last five minutes" stays answerable.
+  #expect(lines[0].start == 29)
+  #expect(lines[1].start == 39)
+
+  let markdown = TranscriptFormatter.markdown(turns)
+  #expect(markdown.contains("**[00:00:29]**"))
+  #expect(markdown.contains("**[00:00:39]**"))
+  // The placeholder speaker is noise and is never printed.
+  #expect(!markdown.contains("Unknown"))
+
+  // The prompt keeps timestamps too, so the model can cite accurate times.
+  let prompt = TranscriptFormatter.promptLines(turns)
+  #expect(prompt.count == 2)
+  #expect(prompt[0].hasPrefix("[00:00:29] "))
+  #expect(!prompt.joined().contains("Unknown"))
+}
+
+@Test func transcriptRenderingKeepsRealSpeakerNames() {
+  // Placeholder labelling is dropped, but a genuine name must still show.
+  let turns = [
+    TranscriptTurn(start: 0, end: 1, speaker: "André", text: "Goedemorgen", source: .microphone),
+    TranscriptTurn(start: 12, end: 13, speaker: "", text: "Hallo", source: .system),
+  ]
+  let markdown = TranscriptFormatter.markdown(turns)
+  #expect(markdown.contains("**[00:00:00] André:** Goedemorgen"))
+  // An empty speaker is treated as a placeholder, not printed as a blank label.
+  #expect(markdown.contains("**[00:00:12]** Hallo"))
+  #expect(!markdown.contains(" :"))
+}
+
+@Test func mergingNeverDropsOrReordersTranscriptContent() {
+  // Interleaved microphone and system fragments must not be spliced together.
+  let turns = [
+    TranscriptTurn(start: 0, end: 1, speaker: "Unknown", text: "alpha", source: .microphone),
+    TranscriptTurn(start: 1, end: 2, speaker: "Unknown", text: "bravo", source: .system),
+    TranscriptTurn(start: 20, end: 21, speaker: "Unknown", text: "charlie", source: .microphone),
+  ]
+  let text = TranscriptFormatter.mergedLines(turns).map(\.text).joined(separator: " ")
+  for word in ["alpha", "bravo", "charlie"] {
+    #expect(text.contains(word))
+  }
+  // Lines are ordered by time regardless of which stream they came from.
+  let starts = TranscriptFormatter.mergedLines(turns).map(\.start)
+  #expect(starts == starts.sorted())
 }
 
 @Test func summaryModelDefaultsToTheChatGPTDefault() throws {
