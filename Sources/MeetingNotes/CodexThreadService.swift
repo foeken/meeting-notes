@@ -2,38 +2,7 @@ import AppKit
 import Foundation
 import SwiftUI
 
-struct CodexAppIcon: View {
-  let size: CGFloat
-  var color: Color?
-
-  var body: some View {
-    Group {
-      if let icon = CodexThreadService.logoImage() {
-        let image = Image(nsImage: icon)
-          .resizable()
-          .renderingMode(.template)
-          .scaledToFit()
-        if let color {
-          image.foregroundStyle(color)
-        } else {
-          image
-        }
-      } else {
-        let fallback = Image(systemName: "sparkle")
-          .font(.system(size: size * 0.62, weight: .semibold))
-        if let color {
-          fallback.foregroundStyle(color)
-        } else {
-          fallback
-        }
-      }
-    }
-    .frame(width: size, height: size)
-  }
-}
-
-/// The OpenAI mark, used where the app refers to ChatGPT rather than to a
-/// Codex task. Rendered as a template image so it follows the label colour.
+/// The OpenAI mark, used wherever the app surfaces ChatGPT.
 struct OpenAIAppIcon: View {
   let size: CGFloat
   var color: Color?
@@ -64,7 +33,7 @@ struct OpenAIAppIcon: View {
   }
 }
 
-struct CodexIconButtonLabel: View {
+struct ChatGPTIconButtonLabel: View {
   let isLoading: Bool
   var isAlternate = false
   @State private var isHovered = false
@@ -75,7 +44,7 @@ struct CodexIconButtonLabel: View {
         ProgressView()
           .controlSize(.small)
       } else {
-        CodexAppIcon(size: 16, color: isAlternate ? .accentColor : nil)
+        OpenAIAppIcon(size: 16, color: isAlternate ? .accentColor : nil)
       }
     }
     .frame(width: 28, height: 24)
@@ -108,7 +77,7 @@ struct CodexIconButtonLabel: View {
   }
 }
 
-struct CodexActionButtonLabel: View {
+struct ChatGPTActionButtonLabel: View {
   let isLoading: Bool
   var isAlternate = false
 
@@ -118,9 +87,11 @@ struct CodexActionButtonLabel: View {
         ProgressView()
           .controlSize(.small)
       } else {
-        CodexAppIcon(size: 15, color: isAlternate ? .accentColor : nil)
+        OpenAIAppIcon(size: 15, color: isAlternate ? .accentColor : nil)
       }
-      Text(isLoading ? "Opening…" : (isAlternate ? "New task" : "Discuss"))
+      Text(
+        isLoading
+          ? "Opening…" : (isAlternate ? "New ChatGPT task" : "Discuss with ChatGPT"))
     }
     .font(.caption.weight(.semibold))
     .padding(.horizontal, 9)
@@ -250,17 +221,8 @@ enum CodexThreadService {
     return candidates.first { manager.isExecutableFile(atPath: $0.path) }
   }
 
-  static func logoImage(bundle: Bundle = .main) -> NSImage? {
-    guard let url = bundle.url(forResource: "CodexLogo", withExtension: "svg") else {
-      return nil
-    }
-    guard let image = NSImage(contentsOf: url) else { return nil }
-    image.isTemplate = true
-    return image
-  }
-
-  /// The OpenAI mark, used wherever the app talks about ChatGPT rather than
-  /// about Codex tasks specifically. Sourced from @lobehub/icons-static-svg.
+  /// The OpenAI mark, used wherever the app surfaces ChatGPT.
+  /// Sourced from @lobehub/icons-static-svg.
   static func openAILogoImage(bundle: Bundle = .main) -> NSImage? {
     guard let url = bundle.url(forResource: "OpenAILogo", withExtension: "svg") else {
       return nil
