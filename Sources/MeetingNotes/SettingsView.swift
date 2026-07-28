@@ -282,6 +282,42 @@ private struct GeneralSettingsPane: View {
               model.persistIgnoredMeetingTitles()
             }
         }
+
+        Divider()
+
+        Text("Updates")
+          .font(.headline)
+
+        HStack(spacing: 16) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Update channel")
+              .font(.body.weight(.medium))
+            Text(model.updateChannel.explanation)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          Spacer()
+          Picker("Update channel", selection: Binding(
+            get: { model.updateChannel },
+            set: { model.setUpdateChannel($0) }
+          )) {
+            ForEach(UpdateChannel.allCases) { channel in
+              Text(channel.label).tag(channel)
+            }
+          }
+          .labelsHidden()
+          .pickerStyle(.menu)
+          .fixedSize()
+        }
+
+        Label(
+          "Beta builds are signed the same way, but they are tested less. Switching back to stable keeps the beta you already installed until the next stable release replaces it.",
+          systemImage: "flask"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
       }
       .padding(28)
     }

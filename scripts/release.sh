@@ -2,8 +2,15 @@
 set -euo pipefail
 
 ROOT=${0:A:h:h}
-VERSION=${1:?usage: scripts/release.sh VERSION BUILD [RELEASE_NOTES_FILE]}
-BUILD=${2:?usage: scripts/release.sh VERSION BUILD [RELEASE_NOTES_FILE]}
+CHANNEL=stable
+if [[ "${1:-}" == "--beta" ]]; then
+  CHANNEL=beta
+  shift
+elif [[ "${1:-}" == "--stable" ]]; then
+  shift
+fi
+VERSION=${1:?usage: scripts/release.sh [--beta] VERSION BUILD [RELEASE_NOTES_FILE]}
+BUILD=${2:?usage: scripts/release.sh [--beta] VERSION BUILD [RELEASE_NOTES_FILE]}
 NOTES_FILE=${3:-}
 RELEASE_REPO=${MEETING_NOTES_RELEASE_REPO:-foeken/meeting-notes}
 NOTARY_PROFILE=${MEETING_NOTES_NOTARY_PROFILE:?set MEETING_NOTES_NOTARY_PROFILE to a notarytool Keychain profile}
@@ -28,8 +35,16 @@ if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
   exit 2
 fi
 
-if ! [[ "$VERSION" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' && "$BUILD" =~ '^[0-9]+$' ]]; then
-  echo "error: VERSION must be x.y.z and BUILD must be an integer" >&2
+# A beta may carry a prerelease suffix (1.2.0-beta.1) so it can ship ahead of
+# the stable version it becomes. The build number stays a plain integer for
+# both channels, because Sparkle orders updates by it.
+if [[ "$CHANNEL" == beta ]]; then
+  VERSION_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
+else
+  VERSION_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+$'
+fi
+if ! [[ "$VERSION" =~ $VERSION_PATTERN && "$BUILD" =~ '^[0-9]+$' ]]; then
+  echo "error: VERSION must be x.y.z${CHANNEL:+ (x.y.z-beta.N is allowed for --beta)} and BUILD must be an integer" >&2
   exit 2
 fi
 if [[ -n "$NOTES_FILE" && ! -f "$NOTES_FILE" ]]; then
@@ -84,18 +99,39 @@ if [[ -n "$NOTES_FILE" ]]; then
   cp "$NOTES_FILE" "$WORK/appcast-source/MeetingNotes-$VERSION.md"
 fi
 
-"$SPARKLE_BIN/generate_appcast" \
-  --account meeting-notes-menu \
-  --download-url-prefix "https://github.com/$RELEASE_REPO/releases/download/v$VERSION/" \
-  --maximum-versions 1 \
-  --maximum-deltas 0 \
-  --embed-release-notes \
-  -o "$ROOT/appcast.xml" \
-  "$WORK/appcast-source"
+# Two feeds are published:
+#
+#   appcast.xml       stable only, read by every default installation
+#   appcast-beta.xml  betas *and* stable, read by Macs set to the beta channel
+#
+# A stable release is written to both feeds, so a beta tester keeps receiving
+# stable releases instead of being stranded on an ageing test build. Beta
+# entries are additionally tagged with <sparkle:channel>beta</sparkle:channel>,
+# so a stable updater ignores them even if it ever read this feed.
+generate_feed() {
+  local output="$1"
+  shift
+  "$SPARKLE_BIN/generate_appcast" \
+    --account meeting-notes-menu \
+    --download-url-prefix "https://github.com/$RELEASE_REPO/releases/download/v$VERSION/" \
+    --maximum-versions 1 \
+    --maximum-deltas 0 \
+    --embed-release-notes \
+    "$@" \
+    -o "$output" \
+    "$WORK/appcast-source"
+}
 
-git -C "$ROOT" add Resources/Info.plist appcast.xml
+if [[ "$CHANNEL" == beta ]]; then
+  generate_feed "$ROOT/appcast-beta.xml" --channel "beta"
+else
+  generate_feed "$ROOT/appcast.xml"
+  generate_feed "$ROOT/appcast-beta.xml"
+fi
+
+git -C "$ROOT" add Resources/Info.plist appcast.xml appcast-beta.xml
 if ! git -C "$ROOT" diff --cached --quiet; then
-  git -C "$ROOT" commit -m "Publish Meeting Notes $VERSION"
+  git -C "$ROOT" commit -m "Publish Meeting Notes $VERSION ($CHANNEL)"
   git -C "$ROOT" push origin main
 fi
 PLIST_COMMITTED=1
@@ -107,6 +143,9 @@ RELEASE_ARGS=(
   --target "$PUBLISHED_SHA"
   --title "Meeting Notes $VERSION"
 )
+if [[ "$CHANNEL" == beta ]]; then
+  RELEASE_ARGS+=(--prerelease)
+fi
 if [[ -n "$NOTES_FILE" ]]; then
   RELEASE_ARGS+=(--notes-file "$NOTES_FILE")
 else
@@ -118,4 +157,4 @@ else
   gh release create $RELEASE_ARGS
 fi
 
-echo "Published Meeting Notes $VERSION ($BUILD) to https://github.com/$RELEASE_REPO/releases/tag/v$VERSION"
+echo "Published Meeting Notes $VERSION ($BUILD, $CHANNEL) to https://github.com/$RELEASE_REPO/releases/tag/v$VERSION"

@@ -2,6 +2,21 @@ import AppKit
 import Sparkle
 import SwiftUI
 
+/// Tells Sparkle which appcast channels this Mac may install from. Read on
+/// every check, so switching the setting takes effect without a relaunch.
+final class UpdateChannelDelegate: NSObject, SPUUpdaterDelegate {
+  func allowedChannels(for updater: SPUUpdater) -> Set<String> {
+    UpdateChannelSettingsStore.load().allowedChannelNames
+  }
+
+  /// Beta testers read a separate feed that also carries every stable
+  /// release. Returning `nil` keeps the bundle's own `SUFeedURL`.
+  func feedURLString(for updater: SPUUpdater) -> String? {
+    let configured = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String
+    return UpdateChannelSettingsStore.load().feedURLString(configuredFeed: configured)
+  }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Single app-wide model. The @main scene reuses this instance so CLI and
@@ -9,9 +24,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   static let sharedModel = AppModel()
 
   private var uiTestWindow: NSWindow?
-  private let updaterController = SPUStandardUpdaterController(
+  /// Sparkle holds its delegate weakly, so this must stay owned here.
+  private let updaterDelegate = UpdateChannelDelegate()
+  private lazy var updaterController = SPUStandardUpdaterController(
     startingUpdater: true,
-    updaterDelegate: nil,
+    updaterDelegate: updaterDelegate,
     userDriverDelegate: nil
   )
 

@@ -91,6 +91,11 @@ Good to know on first launch:
 The **…** menu includes **Check for Updates…**. Automatic update checks and the
 standard update UI are provided by Sparkle.
 
+Under **Settings → General → Update channel** you can choose **Stable** (only
+released versions, the default) or **Beta** (test builds first, plus every
+stable release). Switching back to stable keeps the beta you already installed
+until the next stable release replaces it.
+
 Publishing a release is documented in [`RELEASING.md`](RELEASING.md).
 
 ## Archive and AI retrieval settings
