@@ -154,6 +154,8 @@ final class AppModel {
     store = MeetingStore(
       root: root,
       archiveRoot: Self.archiveRootURL(for: archiveConfiguration.localPath),
+      migrationBackupFolder: FileManager.default.homeDirectoryForCurrentUser
+        .appending(path: "Desktop", directoryHint: .isDirectory),
       sync: remoteSync)
     live = LiveTranscriptionEngine(transcriber: transcriber)
     final = FinalTranscriptionEngine(transcriber: transcriber)
@@ -396,9 +398,11 @@ final class AppModel {
 
   func loadInitialState() async {
     guard !isUITest else { return }
+    await store.migrateLegacyFolderLayout()
     await store.promoteCompletedSpoolMeetings()
     await store.normalizeArchivedMeetingFolders()
     await store.normalizeCompletedMeetingFolders()
+    await remoteSync.pruneEmptyLegacyArchiveDirectories()
     await store.normalizeMeetingDocuments()
     await remoteSync.reconcile(root: root)
     await remoteSync.reconcile(root: Self.archiveRootURL(for: archiveConfiguration.localPath))

@@ -380,6 +380,45 @@ actor RemoteSyncService {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
   }
 
+  /// Removes the `2026/07/28` shells the local archive keeps after its
+  /// meetings moved to the week layout. Only directories that hold nothing
+  /// but Finder's own files are removed, so real content is never touched.
+  func pruneEmptyLegacyArchiveDirectories() {
+    guard let config = try? validatedRemoteConfiguration(),
+      let archive = try? localArchiveURL(for: config)
+    else { return }
+    Self.pruneEmptyLegacyDayDirectories(in: archive)
+  }
+
+  static func pruneEmptyLegacyDayDirectories(in root: URL) {
+    let manager = FileManager.default
+    let disposableNames: Set<String> = [".DS_Store"]
+    func isDisposable(_ directory: URL) -> Bool {
+      guard let entries = try? manager.contentsOfDirectory(
+        at: directory, includingPropertiesForKeys: nil)
+      else { return false }
+      return entries.allSatisfy { disposableNames.contains($0.lastPathComponent) }
+    }
+
+    guard let years = try? manager.contentsOfDirectory(
+      at: root, includingPropertiesForKeys: nil) else { return }
+    for year in years where year.hasDirectoryPath {
+      guard let months = try? manager.contentsOfDirectory(
+        at: year, includingPropertiesForKeys: nil) else { continue }
+      for month in months where month.hasDirectoryPath {
+        // Week folders are named W31; only numeric month folders are legacy.
+        let name = month.lastPathComponent
+        guard name.count == 2, name.allSatisfy(\.isNumber) else { continue }
+        if let days = try? manager.contentsOfDirectory(at: month, includingPropertiesForKeys: nil) {
+          for day in days where day.hasDirectoryPath {
+            if isDisposable(day) { try? manager.removeItem(at: day) }
+          }
+        }
+        if isDisposable(month) { try? manager.removeItem(at: month) }
+      }
+    }
+  }
+
   /// Posts the chosen finished document to a user-supplied endpoint. The body
   /// is the Markdown file itself, so a receiver can store it verbatim.
   private func runHTTPHook(configuration config: Configuration, folder: URL?) async throws {
@@ -497,16 +536,15 @@ actor RemoteSyncService {
 
   static func isSafeMeetingPath(_ path: String) -> Bool {
     let components = path.split(separator: "/", omittingEmptySubsequences: false)
-    guard components.count == 4,
-      components[0].count == 4,
-      components[1].count == 2,
-      components[2].count == 2,
-      components[0].allSatisfy(\.isNumber),
-      components[1].allSatisfy(\.isNumber),
-      components[2].allSatisfy(\.isNumber),
-      !components[3].isEmpty
+    // Both the week layout and the original day layout are accepted: a remote
+    // archive can still hold un-migrated folders that must remain deletable.
+    guard components.count == MeetingFolderLayout.componentCount else { return false }
+    let prefix = Array(components.prefix(3))
+    guard MeetingFolderLayout.isWeekDayPath(prefix)
+      || MeetingFolderLayout.isLegacyDayPath(prefix)
     else { return false }
-    return components[3].allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" }
+    guard let meeting = components.last, !meeting.isEmpty else { return false }
+    return meeting.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" }
   }
 
   private func sync(folder: URL) async throws {

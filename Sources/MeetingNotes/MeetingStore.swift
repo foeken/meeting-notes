@@ -21,6 +21,8 @@ actor MeetingStore {
   private let root: URL
   /// The user-facing archive: finished meetings, exactly one copy.
   private var archiveRoot: URL
+  /// Destination for the pre-migration archive copy; `nil` disables backups.
+  private let migrationBackupFolder: URL?
   private let sync: RemoteSyncService
   private let encoder = JSONEncoder()
   private let decoder = JSONDecoder()
@@ -30,9 +32,16 @@ actor MeetingStore {
   /// `archiveRoot` defaults to `root`, which disables promotion entirely: a
   /// store whose two roots coincide treats every folder as already archived.
   /// The app always passes a distinct archive root.
-  init(root: URL, archiveRoot: URL? = nil, sync: RemoteSyncService) {
+  /// `migrationBackupFolder` is where a pre-migration copy of the archive is
+  /// placed. `nil` disables the backup, which keeps unit-test stores from
+  /// ever writing to the real Desktop; the app passes the Desktop explicitly.
+  init(
+    root: URL, archiveRoot: URL? = nil, migrationBackupFolder: URL? = nil,
+    sync: RemoteSyncService
+  ) {
     self.root = root
     self.archiveRoot = archiveRoot ?? root
+    self.migrationBackupFolder = migrationBackupFolder
     self.sync = sync
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     encoder.dateEncodingStrategy = .iso8601
@@ -94,7 +103,7 @@ actor MeetingStore {
       status: .recording, transcript: []
     )
     let relativeFolder =
-      DateFormatter.folderDay.string(from: now) + "/"
+      MeetingFolderLayout.dayPath(for: now) + "/"
       + "\(DateFormatter.fileTime.string(from: now))-\(title.filenameSafe.isEmpty ? "meeting" : title.filenameSafe)-\(document.id.uuidString.prefix(8))"
     let folder = root.appending(path: relativeFolder)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -208,10 +217,9 @@ actor MeetingStore {
     guard document.status == .complete, !isArchiveFolder(spoolFolder) else { return spoolFolder }
     let manager = FileManager.default
     // The archive path is derived from the meeting's own start date rather
-    // than the spool's relative path, so a spool folder written in another
-    // layout (the week-based experiment) still lands in the archive's
-    // canonical `year/month/day` shape.
-    let relative = DateFormatter.folderDay.string(from: document.startedAt)
+    // than the spool's relative path, so a spool folder written in an older
+    // layout still lands in the archive's canonical week shape.
+    let relative = MeetingFolderLayout.dayPath(for: document.startedAt)
       + "/" + spoolFolder.lastPathComponent
     let destination = archiveRoot.appending(path: relative, directoryHint: .isDirectory)
     do {
@@ -719,6 +727,162 @@ actor MeetingStore {
     try Data(UUID().uuidString.utf8).write(
       to: targetFolder.appending(path: RemoteSyncService.folderMarker), options: .atomic)
     await sync.enqueue(folder: targetFolder, runHookAfterSync: true)
+  }
+
+  /// Moves meetings written in the original `2026/07/28/…` layout into the
+  /// week layout. This only ever moves a folder: meeting content, transcripts,
+  /// audio, and `meeting.json` are never rewritten, so nothing can be lost if
+  /// the app quits midway. Interrupted runs simply resume on the next launch.
+  ///
+  /// Deliberately not reusing `renameCompletedMeeting`: that path clears
+  /// calendar participants, which would quietly discard data here.
+  @discardableResult
+  func migrateLegacyFolderLayout() async -> Int {
+    let manager = FileManager.default
+    // A layout migration is the riskiest thing this store does, so the
+    // user-facing archive is copied to the Desktop first. One backup per day
+    // at most, and only when there is actually something to migrate.
+    backUpArchiveBeforeMigrationIfNeeded()
+    // Both roots can hold day-layout folders: the spool from older builds,
+    // the archive from the consolidation that promoted meetings before the
+    // week layout landed.
+    let legacyFolders = allStateURLs()
+      .map { $0.deletingLastPathComponent() }
+      .compactMap { folder -> (source: URL, base: URL, relative: String, migrated: String)? in
+        // Derived from path components rather than by trimming the root
+        // prefix: the enumerator can report a symlink-resolved path
+        // (/private/var/…) that no longer starts with the root string.
+        let relative = folder.pathComponents
+          .suffix(MeetingFolderLayout.componentCount).joined(separator: "/")
+        guard let migrated = MeetingFolderLayout.migratedPath(forLegacy: relative) else {
+          return nil
+        }
+        return (folder, baseRoot(of: folder), relative, migrated)
+      }
+      .sorted { $0.relative < $1.relative }
+
+    var movedCount = 0
+    for entry in legacyFolders {
+      let destination = entry.base.appending(path: entry.migrated, directoryHint: .isDirectory)
+      guard !manager.fileExists(atPath: destination.path) else { continue }
+      do {
+        try manager.createDirectory(
+          at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try manager.moveItem(at: entry.source, to: destination)
+      } catch {
+        // A folder that cannot move is left exactly where it is; the next
+        // launch retries it.
+        continue
+      }
+      movedCount += 1
+
+      // Only archive folders sync outward; a rename marker tells the remote
+      // to move the folder instead of duplicating it at the old path.
+      if isArchiveFolder(destination) {
+        try? Data(UUID().uuidString.utf8).write(
+          to: destination.appending(path: RemoteSyncService.folderMarker), options: .atomic)
+        try? Data(entry.relative.utf8).write(
+          to: destination.appending(path: RemoteSyncService.renameMarker), options: .atomic)
+        await sync.enqueueRename(
+          folder: destination, previousFolder: entry.source,
+          previousRelativePath: entry.relative)
+      }
+
+      if meeting?.id != nil, folder?.standardizedFileURL == entry.source.standardizedFileURL {
+        folder = destination
+      }
+    }
+
+    if movedCount > 0 { updatePointerPathAfterMigration() }
+    // Always runs: a previous migration can leave day folders behind when
+    // Finder drops a .DS_Store into them after the meetings have moved.
+    removeEmptyLegacyDirectories()
+    return movedCount
+  }
+
+  /// Keeps `current.json` pointing at the meeting after its folder moved.
+  /// Copies the archive to `<backup folder>/Meeting Notes Backup <date>`
+  /// before a layout migration touches it. Copy-only, best-effort, and
+  /// skipped when nothing needs migrating or today's backup already exists:
+  /// a failed backup must not block the migration, but a user must always be
+  /// able to find a pre-migration copy.
+  private func backUpArchiveBeforeMigrationIfNeeded() {
+    guard let migrationBackupFolder else { return }
+    let manager = FileManager.default
+    let needsMigration = allStateURLs().contains { url in
+      let relative = url.deletingLastPathComponent().pathComponents
+        .suffix(MeetingFolderLayout.componentCount).joined(separator: "/")
+      return MeetingFolderLayout.migratedPath(forLegacy: relative) != nil
+    }
+    guard needsMigration else { return }
+    guard manager.fileExists(atPath: archiveRoot.path) else { return }
+
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd"
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    let backup = migrationBackupFolder.appending(
+      path: "Meeting Notes Backup \(formatter.string(from: Date()))",
+      directoryHint: .isDirectory)
+    guard !manager.fileExists(atPath: backup.path) else { return }
+    try? manager.createDirectory(at: migrationBackupFolder, withIntermediateDirectories: true)
+    try? manager.copyItem(at: archiveRoot, to: backup)
+  }
+
+  private func updatePointerPathAfterMigration() {
+    let pointerURL = root.appending(path: "current.json")
+    guard let data = try? Data(contentsOf: pointerURL),
+      var pointer = try? decoder.decode(CurrentMeetingPointer.self, from: data),
+      let migrated = MeetingFolderLayout.migratedPath(forLegacy: pointer.relativeFolder)
+    else { return }
+    pointer.relativeFolder = migrated
+    pointer.updatedAt = Date()
+    try? atomicWrite(encoder.encode(pointer), to: pointerURL)
+    try? Data(UUID().uuidString.utf8).write(
+      to: root.appending(path: RemoteSyncService.pointerMarker), options: .atomic)
+    Task { await sync.enqueuePointer(pointerURL) }
+  }
+
+  /// Removes the `2026/07/28` shells left behind once their meetings moved.
+  /// Only genuinely empty directories are removed, so anything unexpected is
+  /// preserved rather than deleted.
+  private func removeEmptyLegacyDirectories() {
+    let manager = FileManager.default
+    // Finder scatters .DS_Store files around; a day folder holding nothing
+    // else is still empty for our purposes. Only these known-disposable files
+    // are ignored, so a folder with any real content is always kept.
+    let disposableNames: Set<String> = [".DS_Store"]
+    func meaningfulContents(of directory: URL) -> [URL]? {
+      guard let entries = try? manager.contentsOfDirectory(
+        at: directory, includingPropertiesForKeys: nil)
+      else { return nil }
+      return entries.filter { !disposableNames.contains($0.lastPathComponent) }
+    }
+    func removeIfDisposable(_ directory: URL) {
+      guard let remaining = meaningfulContents(of: directory), remaining.isEmpty else { return }
+      try? manager.removeItem(at: directory)
+    }
+
+    var seenRoots = Set<String>()
+    for base in [root, archiveRoot] {
+      guard seenRoots.insert(base.standardizedFileURL.path).inserted else { continue }
+      guard let years = try? manager.contentsOfDirectory(
+        at: base, includingPropertiesForKeys: nil) else { continue }
+      for year in years where year.hasDirectoryPath {
+        guard let months = try? manager.contentsOfDirectory(
+          at: year, includingPropertiesForKeys: nil) else { continue }
+        for month in months where month.hasDirectoryPath {
+          // Week folders are named W31; only numeric month folders are legacy.
+          let name = month.lastPathComponent
+          guard name.count == 2, name.allSatisfy(\.isNumber) else { continue }
+          if let days = try? manager.contentsOfDirectory(
+            at: month, includingPropertiesForKeys: nil) {
+            for day in days where day.hasDirectoryPath { removeIfDisposable(day) }
+          }
+          removeIfDisposable(month)
+        }
+        removeIfDisposable(year)
+      }
+    }
   }
 
   func normalizeCompletedMeetingFolders() async {
