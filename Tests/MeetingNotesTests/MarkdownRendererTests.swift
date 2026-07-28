@@ -922,10 +922,150 @@ import Testing
 }
 
 @Test func onlyGeneratedMeetingPathsAreAcceptedForRemoteDeletion() {
+  // The week layout the app writes today.
+  #expect(
+    RemoteSyncService.isSafeMeetingPath("2026/W29/2026-07-15/0834-project-atlas-review-3F0A1AEA"))
+  // The original layout stays deletable while an archive is still migrating.
   #expect(RemoteSyncService.isSafeMeetingPath("2026/07/15/0834-project-atlas-review-3F0A1AEA"))
   #expect(!RemoteSyncService.isSafeMeetingPath("../../important"))
+  #expect(!RemoteSyncService.isSafeMeetingPath("2026/W29/2026-07-15/meeting with spaces"))
+  #expect(!RemoteSyncService.isSafeMeetingPath("2026/W29/../etc/passwd"))
   #expect(!RemoteSyncService.isSafeMeetingPath("2026/07/15/meeting with spaces"))
   #expect(!RemoteSyncService.isSafeMeetingPath("2026/07/15"))
+}
+
+@Test func meetingFoldersAreGroupedByIsoWeek() {
+  var components = DateComponents()
+  components.year = 2026
+  components.month = 7
+  components.day = 28
+  components.hour = 10
+  let calendar = MeetingFolderLayout.isoCalendar
+  let date = try! #require(calendar.date(from: components))
+  #expect(MeetingFolderLayout.dayPath(for: date) == "2026/W31/2026-07-28")
+
+  // A legacy path keeps its own date; only the grouping changes.
+  #expect(
+    MeetingFolderLayout.migratedPath(forLegacy: "2026/07/28/1030-review-A1B2C3D4")
+      == "2026/W31/2026-07-28/1030-review-A1B2C3D4")
+
+  // Already-migrated paths and junk are left alone.
+  #expect(
+    MeetingFolderLayout.migratedPath(forLegacy: "2026/W31/2026-07-28/1030-review-A1B2C3D4") == nil)
+  #expect(MeetingFolderLayout.migratedPath(forLegacy: "2026/07/28") == nil)
+
+  // Early January belongs to the final ISO week of the previous year, so the
+  // week folder must not be split across two year folders.
+  var newYear = DateComponents()
+  newYear.year = 2027
+  newYear.month = 1
+  newYear.day = 1
+  newYear.hour = 12
+  let newYearDate = try! #require(calendar.date(from: newYear))
+  #expect(MeetingFolderLayout.dayPath(for: newYearDate) == "2026/W53/2027-01-01")
+}
+
+@Test func legacyFoldersMigrateToWeekLayoutWithoutLosingAnything() async throws {
+  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let spool = base.appending(path: "spool")
+  let archive = base.appending(path: "archive")
+  defer { try? FileManager.default.removeItem(at: base) }
+  let manager = FileManager.default
+
+  let sync = RemoteSyncService(
+    configuration: .init(
+      destination: .local, host: "", path: "", localPath: archive.path, enabled: true))
+  let store = MeetingStore(root: spool, sync: sync)
+
+  // A completed meeting written in the original layout, including audio and
+  // a transcript, so the move has real content to preserve.
+  let legacyFolder = spool.appending(path: "2026/07/15/0834-project-atlas-review-3F0A1AEA")
+  try manager.createDirectory(at: legacyFolder, withIntermediateDirectories: true)
+  var started = DateComponents()
+  started.year = 2026
+  started.month = 7
+  started.day = 15
+  started.hour = 8
+  started.minute = 34
+  let startedAt = try #require(MeetingFolderLayout.isoCalendar.date(from: started))
+  let meetingID = try #require(UUID(uuidString: "3F0A1AEA-1111-2222-3333-444455556666"))
+  var document = MeetingDocument(
+    id: meetingID, title: "Project Atlas review", startedAt: startedAt,
+    status: .complete, transcript: [])
+  document.endedAt = startedAt.addingTimeInterval(1_800)
+  document.calendar = CalendarMetadata(
+    eventIdentifier: "event-1", calendarTitle: "Work",
+    scheduledStart: startedAt, scheduledEnd: startedAt.addingTimeInterval(1_800),
+    organizer: nil,
+    participants: [MeetingParticipant(name: "André Foeken"), MeetingParticipant(name: "Sandra")])
+  let encoder = JSONEncoder()
+  encoder.dateEncodingStrategy = .iso8601
+  try encoder.encode(document).write(to: legacyFolder.appending(path: "meeting.json"))
+  try Data("# Notes".utf8).write(to: legacyFolder.appending(path: "meeting.md"))
+  try Data("00:00 hello".utf8).write(to: legacyFolder.appending(path: "transcript.md"))
+  try Data("audio".utf8).write(to: legacyFolder.appending(path: "microphone.wav"))
+
+  let moved = await store.migrateLegacyFolderLayout()
+  #expect(moved == 1)
+
+  // Everything moved intact, and the old location is gone rather than duplicated.
+  let migrated = spool.appending(path: "2026/W29/2026-07-15/0834-project-atlas-review-3F0A1AEA")
+  #expect(manager.fileExists(atPath: migrated.appending(path: "meeting.md").path))
+  #expect(manager.fileExists(atPath: migrated.appending(path: "transcript.md").path))
+  #expect(manager.fileExists(atPath: migrated.appending(path: "microphone.wav").path))
+  #expect(!manager.fileExists(atPath: legacyFolder.path))
+  // The empty 2026/07 shell is cleaned up, but the year folder still holds W29.
+  #expect(!manager.fileExists(atPath: spool.appending(path: "2026/07").path))
+
+  // Meeting content is untouched, including participants that the rename path
+  // would have cleared.
+  let decoder = JSONDecoder()
+  decoder.dateDecodingStrategy = .iso8601
+  let reloaded = try decoder.decode(
+    MeetingDocument.self, from: Data(contentsOf: migrated.appending(path: "meeting.json")))
+  #expect(reloaded.id == meetingID)
+  #expect(reloaded.title == "Project Atlas review")
+  #expect(reloaded.calendar?.participants.count == 2)
+  #expect(try String(contentsOf: migrated.appending(path: "transcript.md")) == "00:00 hello")
+
+  // Running again is a no-op, so an interrupted migration resumes safely.
+  let second = await store.migrateLegacyFolderLayout()
+  #expect(second == 0)
+  #expect(manager.fileExists(atPath: migrated.appending(path: "meeting.json").path))
+
+  // The meeting is still findable by id after the move.
+  let (found, foundFolder) = try await store.completedMeeting(id: meetingID)
+  #expect(found.title == "Project Atlas review")
+  #expect(foundFolder.standardizedFileURL == migrated.standardizedFileURL)
+}
+
+@Test func legacyCleanupIgnoresFinderFilesButKeepsRealContent() async throws {
+  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let spool = base.appending(path: "spool")
+  defer { try? FileManager.default.removeItem(at: base) }
+  let manager = FileManager.default
+
+  let sync = RemoteSyncService(
+    configuration: .init(
+      destination: .local, host: "", path: "",
+      localPath: base.appending(path: "archive").path, enabled: true))
+  let store = MeetingStore(root: spool, sync: sync)
+
+  // An emptied day folder that Finder has since littered with .DS_Store.
+  let finderLeftover = spool.appending(path: "2026/07/15")
+  try manager.createDirectory(at: finderLeftover, withIntermediateDirectories: true)
+  try Data("finder".utf8).write(to: finderLeftover.appending(path: ".DS_Store"))
+
+  // A legacy day folder that still holds something real must survive.
+  let keepMe = spool.appending(path: "2026/08/03")
+  try manager.createDirectory(at: keepMe, withIntermediateDirectories: true)
+  try Data("important".utf8).write(to: keepMe.appending(path: "notes.txt"))
+
+  _ = await store.migrateLegacyFolderLayout()
+
+  #expect(!manager.fileExists(atPath: finderLeftover.path))
+  #expect(!manager.fileExists(atPath: spool.appending(path: "2026/07").path))
+  #expect(manager.fileExists(atPath: keepMe.appending(path: "notes.txt").path))
 }
 
 @Test func freshArchiveSettingsAreLocalAndRoundTrip() throws {
