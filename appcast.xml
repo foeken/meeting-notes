@@ -6,45 +6,28 @@
         <description>Signed application updates for Meeting Notes.</description>
         <language>en</language>
         <item>
-            <title>1.1.0</title>
-            <pubDate>Mon, 27 Jul 2026 12:44:40 +0200</pubDate>
-            <sparkle:version>5</sparkle:version>
-            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+            <title>1.2.0</title>
+            <pubDate>Tue, 28 Jul 2026 19:16:31 +0200</pubDate>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## Meeting Notes 1.1
+            <description sparkle:format="markdown"><![CDATA[## Meeting Notes 1.2
 
-Post-meeting automation: when a meeting finishes, Meeting Notes can now hand the
-result to whatever you use next.
+### Update channel
 
-### Hooks
-
-- **Web request hook** — POST the finished meeting notes or the word-for-word
-  transcript to any endpoint. Choose the URL, pick which document to send, and
-  add your own headers (one `Name: value` per line) to authenticate.
-- Every request carries the meeting title, id, start and end times, duration,
-  participants, and archive folder as `X-Meeting-Notes-…` headers, so a receiver
-  can file the document without parsing it first.
-- The existing command hook is unchanged, and the two now run independently: one
-  failing integration no longer stops the other.
-
-### Codex
-
-- **Run a task after the notes are ready** — send an instruction to the meeting's
-  Codex task once its summary exists, and let the task actually carry it out
-  (extract action items, file the notes elsewhere, and so on). Off by default.
-- **Create tasks automatically** — optionally start a Codex task in the
-  background whenever a recording begins. Off by default.
-- Templates substitute names and paths only, so a task reads `meeting.md` from
-  disk instead of working from a pasted copy that can go stale.
-
-### Fixes
-
-- The settings window is resizable and now remembers its size and position.
-- Fixed text in the settings editors overflowing onto the controls below.
-- Settings toggles are aligned consistently.
+- **Choose stable or beta updates** — a new **Update channel** setting under
+  **Settings → General** decides which builds this Mac installs.
+- **Stable** is the default and installs released versions only. Nothing
+  changes for existing installations.
+- **Beta** installs test builds as they appear, and still receives every
+  stable release, so a beta tester is never left behind on an ageing build.
+- Switching back to stable keeps the beta already installed; the next stable
+  release replaces it.
+- Beta builds are signed and notarized exactly like stable ones. They are
+  simply tested less.
 ]]></description>
-            <enclosure url="https://github.com/foeken/meeting-notes/releases/download/v1.1.0/MeetingNotes-1.1.0.dmg" length="5122749" type="application/octet-stream" sparkle:edSignature="x3+tmB7bgkvyXWRk91wmL1iXAuznOLd1dWGgV/WwW5RZ83YivDE4KqZi+nvPnQiJC7amT8EsklEYRh2TIGHzCA=="/>
+            <enclosure url="https://github.com/foeken/meeting-notes/releases/download/v1.2.0/MeetingNotes-1.2.0.dmg" length="5136298" type="application/octet-stream" sparkle:edSignature="SXkyq3L99IKiYiZb9DrqjBp4ijWVcBH5GVH11eW9judEieqQ3zbw4ayRtBSn2GBJO/nwWGb3CtEGYTMeFhbkBw=="/>
         </item>
     </channel>
 </rss>
