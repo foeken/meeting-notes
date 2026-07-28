@@ -6,8 +6,13 @@ authenticated GitHub CLI access. Signed archives are attached to GitHub Releases
 while `appcast.xml` is versioned alongside the source. Private signing material
 never enters the repository.
 
+`MEETING_NOTES_NOTARY_PROFILE` names the `notarytool` Keychain profile, which is
+separate from the Sparkle signing key account. Check which profiles exist with
+`xcrun notarytool history --keychain-profile <name>`, and create one with
+`xcrun notarytool store-credentials`.
+
 ```sh
-export MEETING_NOTES_NOTARY_PROFILE="meeting-notes-menu"
+export MEETING_NOTES_NOTARY_PROFILE="notarytool"
 scripts/release.sh 0.3.0 3 ~/Desktop/meeting-notes-0.3.0.md
 ```
 
@@ -21,11 +26,15 @@ the update signing key remains in the release Mac's Keychain.
 
 ## Beta releases
 
-Pass `--beta` to publish to the beta channel instead:
+Use `scripts/release-beta.sh` to publish to the beta channel:
 
 ```sh
-scripts/release.sh --beta 1.2.0-beta.1 6 ~/Desktop/meeting-notes-1.2.0-beta.1.md
+scripts/release-beta.sh 1.2.0-beta.1 6 ~/Desktop/meeting-notes-1.2.0-beta.1.md
 ```
+
+It wraps `scripts/release.sh --beta` and refuses a version without a prerelease
+suffix, or a build number already published in either feed. `--beta` still works
+directly if you need to bypass those checks.
 
 Two feeds are published side by side:
 
