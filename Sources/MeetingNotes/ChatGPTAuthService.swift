@@ -62,16 +62,23 @@ actor ChatGPTAuthService {
     try schemaData.write(to: schemaURL, options: .atomic)
 
     let instruction = Self.instruction(prompt: prompt)
-    let result = try await run(
-      executable,
-      arguments: [
-        "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-        "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never",
-        "--model", model, "-c", "model_reasoning_effort=\"\(reasoningEffort)\"",
-        "--output-schema", schemaURL.path, "--output-last-message", outputURL.path,
-        "-C", temporary.path, "-",
-      ],
-      input: Data(instruction.utf8))
+    var arguments = [
+      "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+      "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never",
+    ]
+    // An empty model means "use the ChatGPT default", so the flag is omitted
+    // entirely rather than sent as an empty string.
+    let cleanModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !cleanModel.isEmpty { arguments += ["--model", cleanModel] }
+    let cleanEffort = reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !cleanEffort.isEmpty {
+      arguments += ["-c", "model_reasoning_effort=\"\(cleanEffort)\""]
+    }
+    arguments += [
+      "--output-schema", schemaURL.path, "--output-last-message", outputURL.path,
+      "-C", temporary.path, "-",
+    ]
+    let result = try await run(executable, arguments: arguments, input: Data(instruction.utf8))
     guard result.status == 0 else { throw AuthError.commandFailed(cleanError(result.output)) }
     guard let data = try? Data(contentsOf: outputURL), !data.isEmpty else {
       throw AuthError.missingOutput

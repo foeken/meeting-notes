@@ -1,7 +1,13 @@
 import Foundation
 
 actor OpenAIEnricher {
-  private let model = "gpt-5.6-sol"
+  /// Empty means "let ChatGPT decide", matching the meeting-task model
+  /// setting. Read per request so a change applies without restarting.
+  private var model: String { CodexPromptSettingsStore.loadSummaryModel() }
+  private var reasoningEffort: String {
+    let stored = CodexPromptSettingsStore.loadSummaryReasoningEffort()
+    return stored.isEmpty ? "medium" : stored
+  }
   static let transcriptChunkCharacterLimit = 80_000
   nonisolated static let summaryGuidance = """
     Write a substantive executive summary covering every major topic, decision, rationale, disagreement, and next step. For meetings over 30 minutes, target roughly 250–400 words; shorter meetings may use less. Avoid unnecessary repetition, but do not sacrifice important context for brevity.
@@ -187,8 +193,10 @@ actor OpenAIEnricher {
 
   private func requestInsights(prompt: String) async throws -> GeneratedInsights {
     let schemaData = try JSONSerialization.data(withJSONObject: Self.schema, options: [.sortedKeys])
+    let selectedModel = model
     let data = try await ChatGPTAuthService.shared.generateStructuredOutput(
-      prompt: prompt, schemaData: schemaData, model: model, reasoningEffort: "medium")
+      prompt: prompt, schemaData: schemaData, model: selectedModel,
+      reasoningEffort: reasoningEffort)
     do {
       return try JSONDecoder().decode(GeneratedInsights.self, from: data)
     } catch {
@@ -217,7 +225,8 @@ actor OpenAIEnricher {
       actionItems: evidence(generated.actionItems),
       openQuestions: evidence(generated.openQuestions),
       keyStatements: evidence(generated.keyStatements),
-      generatedAt: Date(), generator: "OpenAI \(model) via ChatGPT"
+      generatedAt: Date(),
+      generator: model.isEmpty ? "ChatGPT default model" : "OpenAI \(model) via ChatGPT"
     )
   }
 

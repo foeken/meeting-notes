@@ -48,14 +48,14 @@ struct SettingsView: View {
   @ViewBuilder
   private func sidebarLabel(for pane: SettingsPane) -> some View {
     if pane == .codex {
-      CodexSidebarLabel(title: pane.title, isSelected: selection == pane)
+      OpenAISidebarLabel(title: pane.title, isSelected: selection == pane)
     } else {
       Label(pane.title, systemImage: pane.systemImage)
     }
   }
 }
 
-private struct CodexSidebarLabel: View {
+private struct OpenAISidebarLabel: View {
   let title: String
   let isSelected: Bool
   @State private var windowIsKey = true
@@ -71,7 +71,7 @@ private struct CodexSidebarLabel: View {
           .font(.body.weight(.regular))
       }
     } icon: {
-      CodexAppIcon(
+      OpenAIAppIcon(
         size: 16,
         color: isHighlighted ? .white : .accentColor)
     }
@@ -143,7 +143,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case .microphone: "Microphone"
     case .tana: "Tana"
     case .dictionary: "Dictionary"
-    case .codex: "Codex"
+    case .codex: "ChatGPT"
     }
   }
 
@@ -296,11 +296,69 @@ private struct CodexSettingsPane: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
         SettingsPaneHeader(
-          title: "Codex",
-          subtitle: "Customize how new meeting tasks are prepared in Codex."
+          title: "ChatGPT",
+          subtitle: "Choose the models used for meeting notes and for meeting tasks."
         )
 
         Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Meeting notes")
+            .font(.headline)
+
+          Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
+            GridRow {
+              Text("Model")
+                .gridColumnAlignment(.trailing)
+              HStack(spacing: 8) {
+                Picker("Model", selection: Binding(
+                  get: { model.summaryModel },
+                  set: { model.setSummaryModel($0) }
+                )) {
+                  Text("ChatGPT default").tag("")
+                  ForEach(model.codexAvailableModels) { choice in
+                    Text(choice.displayName).tag(choice.id)
+                  }
+                }
+                .labelsHidden()
+                .fixedSize()
+
+                if model.codexModelsLoading {
+                  ProgressView().controlSize(.small)
+                }
+              }
+            }
+
+            if !model.summaryReasoningEffortChoices.isEmpty {
+              GridRow {
+                Text("Reasoning")
+                  .gridColumnAlignment(.trailing)
+                Picker("Reasoning", selection: Binding(
+                  get: { model.summaryReasoningEffort },
+                  set: { model.setSummaryReasoningEffort($0) }
+                )) {
+                  Text("Model default").tag("")
+                  ForEach(model.summaryReasoningEffortChoices, id: \.self) { effort in
+                    Text(effort.capitalized).tag(effort)
+                  }
+                }
+                .labelsHidden()
+                .fixedSize()
+              }
+            }
+          }
+          .controlSize(.large)
+
+          Text("Used to write the summary and topics for each finished meeting. ChatGPT default lets ChatGPT choose.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Divider()
+
+        Text("Meeting tasks")
+          .font(.headline)
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
@@ -332,7 +390,7 @@ private struct CodexSettingsPane: View {
                   get: { model.codexModel },
                   set: { model.setCodexModel($0) }
                 )) {
-                  Text("Codex default").tag("")
+                  Text("ChatGPT default").tag("")
                   ForEach(model.codexAvailableModels) { choice in
                     Text(choice.displayName).tag(choice.id)
                   }
@@ -366,7 +424,7 @@ private struct CodexSettingsPane: View {
           }
           .controlSize(.large)
 
-          Text("New meeting tasks use this model. The list comes from Codex itself, so it stays current. Codex default lets Codex choose.")
+          Text("New meeting tasks use this model. The list comes from ChatGPT itself, so it stays current. ChatGPT default lets ChatGPT choose.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

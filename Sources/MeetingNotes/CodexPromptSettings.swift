@@ -7,6 +7,8 @@ enum CodexPromptSettingsStore {
   private static let autoCreateThreadsKey = "codexAutoCreateThreads"
   private static let modelKey = "codexTaskModel"
   private static let reasoningEffortKey = "codexTaskReasoningEffort"
+  private static let summaryModelKey = "summaryModel"
+  private static let summaryReasoningEffortKey = "summaryReasoningEffort"
 
   static func load(from defaults: UserDefaults = .standard) -> String {
     guard let stored = defaults.string(forKey: key),
@@ -70,5 +72,25 @@ enum CodexPromptSettingsStore {
 
   static func saveReasoningEffort(_ effort: String, to defaults: UserDefaults = .standard) {
     defaults.set(effort, forKey: reasoningEffortKey)
+  }
+
+  /// The model used to write meeting notes. An empty value means the ChatGPT
+  /// default, matching how the meeting-task model is stored.
+  static func loadSummaryModel(from defaults: UserDefaults = .standard) -> String {
+    defaults.string(forKey: summaryModelKey) ?? ""
+  }
+
+  static func saveSummaryModel(_ model: String, to defaults: UserDefaults = .standard) {
+    defaults.set(model, forKey: summaryModelKey)
+  }
+
+  static func loadSummaryReasoningEffort(from defaults: UserDefaults = .standard) -> String {
+    defaults.string(forKey: summaryReasoningEffortKey) ?? ""
+  }
+
+  static func saveSummaryReasoningEffort(
+    _ effort: String, to defaults: UserDefaults = .standard
+  ) {
+    defaults.set(effort, forKey: summaryReasoningEffortKey)
   }
 }
