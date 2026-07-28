@@ -92,9 +92,9 @@ actor OpenAIEnricher {
   }
 
   nonisolated static func transcriptChunks(_ turns: [TranscriptTurn]) -> [String] {
-    let lines = turns.sorted(by: { $0.start < $1.start }).map {
-      "[\($0.start.meetingTimestamp)] Unknown: \($0.text)"
-    }
+    // Merged, label-free lines keep the prompt readable and cheap while every
+    // line keeps its timestamp so the model can answer time-scoped questions.
+    let lines = TranscriptFormatter.promptLines(turns)
     var chunks: [String] = []
     var current = ""
     for line in lines {

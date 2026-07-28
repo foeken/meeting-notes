@@ -111,22 +111,19 @@ enum MarkdownRenderer {
   }
 
   private static func renderTurns(_ turns: [TranscriptTurn]) -> String {
-    turns.sorted(by: { $0.start < $1.start }).map {
-      "**[\($0.start.meetingTimestamp)] \($0.speaker):** \($0.text.trimmingCharacters(in: .whitespacesAndNewlines))\n"
-    }.joined(separator: "\n")
+    TranscriptFormatter.markdown(turns)
   }
 
   private static func renderSegmentedTurns(_ turns: [TranscriptTurn]) -> String {
     var output = ""
     var bucket = -1
-    for turn in turns {
-      let nextBucket = Int(turn.start / 480)
+    for line in TranscriptFormatter.mergedLines(turns) {
+      let nextBucket = Int(line.start / 480)
       if nextBucket != bucket {
         bucket = nextBucket
         output += "## Segment \(bucket + 1) [\(TimeInterval(bucket * 480).meetingTimestamp)]\n\n"
       }
-      output +=
-        "**[\(turn.start.meetingTimestamp)] \(turn.speaker):** \(turn.text.trimmingCharacters(in: .whitespacesAndNewlines))\n\n"
+      output += TranscriptFormatter.markdownLine(line) + "\n\n"
     }
     return output
   }
