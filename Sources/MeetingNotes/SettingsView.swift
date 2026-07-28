@@ -315,7 +315,7 @@ private struct CodexSettingsPane: View {
                   get: { model.summaryModel },
                   set: { model.setSummaryModel($0) }
                 )) {
-                  Text("ChatGPT default").tag("")
+                  Text("Default Model").tag("")
                   ForEach(model.codexAvailableModels) { choice in
                     Text(choice.displayName).tag(choice.id)
                   }
@@ -349,7 +349,7 @@ private struct CodexSettingsPane: View {
           }
           .controlSize(.large)
 
-          Text("Used to write the summary and topics for each finished meeting. ChatGPT default lets ChatGPT choose.")
+          Text("Used to write the summary and topics for each finished meeting. Default Model uses whichever model Codex runs by default.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -390,7 +390,7 @@ private struct CodexSettingsPane: View {
                   get: { model.codexModel },
                   set: { model.setCodexModel($0) }
                 )) {
-                  Text("ChatGPT default").tag("")
+                  Text("Default Model").tag("")
                   ForEach(model.codexAvailableModels) { choice in
                     Text(choice.displayName).tag(choice.id)
                   }
@@ -424,7 +424,7 @@ private struct CodexSettingsPane: View {
           }
           .controlSize(.large)
 
-          Text("New meeting tasks use this model. The list comes from ChatGPT itself, so it stays current. ChatGPT default lets ChatGPT choose.")
+          Text("New meeting tasks use this model. The list comes from Codex itself, so it stays current. Default Model uses whichever model Codex starts tasks with.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
