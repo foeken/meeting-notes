@@ -65,6 +65,7 @@ final class AppModel {
   var removeFillerWords = FillerWordSettingsStore.load()
   var meetingNotesLanguage = MeetingNotesLanguageStore.load()
   var ignoredMeetingTitlesDraft = IgnoredMeetingTitlesStore.load().joined(separator: ", ")
+  var updateChannel = UpdateChannelSettingsStore.load()
   var automaticTranscriptDeletionEnabled = true
   var transcriptRetentionDays = TranscriptRetentionSettings.defaultDays
   var transcriptRetentionStatusText = ""
@@ -321,6 +322,18 @@ final class AppModel {
       language == .source
         ? "Meeting notes will follow the transcript language"
         : "Meeting notes will be written in \(language.label)")
+  }
+
+  /// Sparkle reads the stored channel on every check, so no relaunch is
+  /// needed. Moving back to stable never downgrades an already-installed beta.
+  func setUpdateChannel(_ channel: UpdateChannel) {
+    guard updateChannel != channel else { return }
+    updateChannel = channel
+    UpdateChannelSettingsStore.save(channel)
+    showTransientStatus(
+      channel == .beta
+        ? "Updates will include beta builds"
+        : "Updates will follow stable releases only")
   }
 
   func dismissDetectedMeeting() {

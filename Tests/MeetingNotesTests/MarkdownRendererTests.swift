@@ -1338,6 +1338,49 @@ import Testing
   #expect(TanaSettingsStore.load(from: defaults) == settings)
 }
 
+@Test func updateChannelDefaultsToStableAndRoundTrips() throws {
+  let suite = "MeetingNotesUpdateChannelTests-\(UUID().uuidString)"
+  let defaults = try #require(UserDefaults(suiteName: suite))
+  defer { defaults.removePersistentDomain(forName: suite) }
+
+  // An unconfigured Mac must never be moved onto test builds silently.
+  #expect(UpdateChannelSettingsStore.load(from: defaults) == .stable)
+
+  UpdateChannelSettingsStore.save(.beta, to: defaults)
+  #expect(UpdateChannelSettingsStore.load(from: defaults) == .beta)
+
+  UpdateChannelSettingsStore.save(.stable, to: defaults)
+  #expect(UpdateChannelSettingsStore.load(from: defaults) == .stable)
+
+  // A value written by a newer build must not leave the updater unconfigured.
+  defaults.set("nightly", forKey: "updates.channel")
+  #expect(UpdateChannelSettingsStore.load(from: defaults) == .stable)
+}
+
+@Test func stableChannelSeesOnlyDefaultFeedEntries() {
+  // Sparkle always includes the default channel, so stable is the empty set
+  // rather than an explicit list, and beta only *adds* the tagged entries.
+  #expect(UpdateChannel.stable.allowedChannelNames.isEmpty)
+  #expect(UpdateChannel.beta.allowedChannelNames == ["beta"])
+  #expect(UpdateChannel.betaChannelName == "beta")
+}
+
+@Test func betaChannelReadsTheFeedBesideTheStableOne() {
+  let stableFeed = "https://raw.githubusercontent.com/foeken/meeting-notes/main/appcast.xml"
+  let betaFeed = "https://raw.githubusercontent.com/foeken/meeting-notes/main/appcast-beta.xml"
+
+  // Stable keeps the bundle's own SUFeedURL, which Sparkle signals with nil.
+  #expect(UpdateChannel.stable.feedURLString(configuredFeed: stableFeed) == nil)
+  #expect(UpdateChannel.beta.feedURLString(configuredFeed: stableFeed) == betaFeed)
+
+  // A missing or unrecognised feed must fall back to the shipped one rather
+  // than sending the updater to a URL that was never published.
+  #expect(UpdateChannel.beta.feedURLString(configuredFeed: nil) == nil)
+  #expect(UpdateChannel.beta.feedURLString(configuredFeed: "") == nil)
+  #expect(UpdateChannel.beta.feedURLString(configuredFeed: "https://example.com/feed.xml") == nil)
+  #expect(UpdateChannel.beta.feedURLString(configuredFeed: betaFeed) == nil)
+}
+
 @Test func tanaEntityMatcherFindsLikelyMisrecognizedNamesWithoutDumpingTheGraph() {
   let meeting = MeetingDocument(
     id: UUID(), title: "Weekly meeting", startedAt: Date(), status: .complete,
