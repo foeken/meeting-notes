@@ -188,7 +188,7 @@ struct MenuBarView: View {
           Button {
             model.discussCurrentMeetingInCodex(startNewTask: optionKey.isPressed)
           } label: {
-            CodexActionButtonLabel(
+            ChatGPTActionButtonLabel(
               isLoading: model.codexLaunchingCurrentMeeting,
               isAlternate: optionKey.isPressed)
           }
@@ -196,8 +196,8 @@ struct MenuBarView: View {
           .disabled(model.codexLaunchingCurrentMeeting)
           .help(
             optionKey.isPressed
-              ? "Start a new Codex task for this meeting"
-              : "Discuss this meeting in Codex (hold Option for a new task)")
+              ? "Start a new ChatGPT task for this meeting"
+              : "Discuss this meeting with ChatGPT (hold Option for a new task)")
         }
       }
       HStack(spacing: 10) {
@@ -353,7 +353,7 @@ struct MenuBarView: View {
               Button {
                 model.discussMeetingInCodex(meeting, startNewTask: optionKey.isPressed)
               } label: {
-                CodexIconButtonLabel(
+                ChatGPTIconButtonLabel(
                   isLoading: model.codexLaunchingMeetingID == meeting.id,
                   isAlternate: optionKey.isPressed)
               }
@@ -364,8 +364,8 @@ struct MenuBarView: View {
               )
               .help(
                 optionKey.isPressed
-                  ? "Start a new Codex task for this meeting"
-                  : "Discuss in Codex (hold Option for a new task)")
+                  ? "Start a new ChatGPT task for this meeting"
+                  : "Discuss with ChatGPT (hold Option for a new task)")
               Menu {
                 if model.isMeetingFinalizing(meeting) {
                   Button("Finalizing…", systemImage: "waveform") {}
