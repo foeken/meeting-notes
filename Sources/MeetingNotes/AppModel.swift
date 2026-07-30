@@ -38,6 +38,10 @@ final class AppModel {
   var enrichmentRetryAvailable = false
   var displayedMeetings: [TodayMeetingSummary] = []
   var selectedMeetingDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+  /// True while the meeting list is meant to show "today". Midnight and wake
+  /// then advance the list automatically; an explicit visit to an older day
+  /// stays put until the user navigates back.
+  private var followsCurrentDay = true
   var meetingPendingDeletion: TodayMeetingSummary?
   var meetingPendingRename: TodayMeetingSummary?
   var meetingRenameDraft = ""
@@ -169,6 +173,15 @@ final class AppModel {
       notifications.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main)
       { [weak self] _ in
         Task { @MainActor in self?.didWake() }
+      })
+    // The system posts this at midnight, on time-zone changes, and after
+    // clock adjustments. Sleeping through midnight can swallow it, so wake
+    // also re-checks the day below.
+    workspaceObservers.append(
+      NotificationCenter.default.addObserver(
+        forName: .NSCalendarDayChanged, object: nil, queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor in self?.handleDayChange() }
       })
     if !isUITest && !isMaintenance {
       MeetingNotificationService.shared.onStartRecording = { [weak self] in
@@ -554,6 +567,20 @@ final class AppModel {
       return
     }
     selectedMeetingDate = calendar.startOfDay(for: min(date, Date()))
+    followsCurrentDay = calendar.isDateInToday(selectedMeetingDate)
+    meetingPendingDeletion = nil
+    meetingPendingRename = nil
+    Task { await refreshMeetingDay() }
+  }
+
+  /// Rolls the list forward when the calendar day changes underneath an open
+  /// app. Only a list that was already showing "today" moves; a deliberately
+  /// selected earlier day is left alone.
+  func handleDayChange() {
+    guard followsCurrentDay else { return }
+    let today = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+    guard selectedMeetingDate != today else { return }
+    selectedMeetingDate = today
     meetingPendingDeletion = nil
     meetingPendingRename = nil
     Task { await refreshMeetingDay() }
@@ -607,6 +634,7 @@ final class AppModel {
     )
     pendingMeetingSummaries[pending.id] = pending
     selectedMeetingDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+    followsCurrentDay = true
     guard !displayedMeetings.contains(where: { $0.id == pending.id }) else { return }
     displayedMeetings.insert(pending, at: 0)
   }
@@ -1520,6 +1548,9 @@ final class AppModel {
   }
 
   private func didWake() {
+    // A Mac that slept across midnight may never receive the day-changed
+    // notification, so the day is re-checked on every wake.
+    handleDayChange()
     guard pausedBySleep, state == .paused else { return }
     statusText = "Paused after sleep — press Resume"
   }
@@ -1756,6 +1787,7 @@ final class AppModel {
       enrichmentRetryAvailable = await store.latestNeedsEnrichmentFolder() != nil
       state = .idle
       selectedMeetingDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+      followsCurrentDay = true
       await refreshMeetingDay()
       if let cleanupWarning {
         reportWarning("Meeting recovered; audio cleanup pending: \(cleanupWarning)")
