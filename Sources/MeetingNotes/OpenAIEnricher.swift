@@ -9,9 +9,11 @@ actor OpenAIEnricher {
     return stored.isEmpty ? "medium" : stored
   }
   static let transcriptChunkCharacterLimit = 80_000
-  nonisolated static let summaryGuidance = """
+  nonisolated static let defaultSummaryGuidance = """
     Write a substantive executive summary covering every major topic, decision, rationale, disagreement, and next step. For meetings over 30 minutes, target roughly 250–400 words; shorter meetings may use less. Avoid unnecessary repetition, but do not sacrifice important context for brevity.
     """
+  /// Read per request so a settings change applies without restarting.
+  private var summaryGuidance: String { SummarySettingsStore.loadGuidance() }
 
   enum EnrichmentError: LocalizedError {
     case notSignedIn
@@ -148,7 +150,7 @@ actor OpenAIEnricher {
     \(outputLanguage.processingInstruction)
     Preserve proper nouns in their established spelling. Do not translate names, product names, or project names.
     All transcript turns are intentionally unattributed. Never infer a speaker from the calendar participant list or from conversational context. Describe the discussion neutrally.
-    \(Self.summaryGuidance)
+    \(summaryGuidance)
     Preserve concrete names, products, projects, dates, numbers, objections, and outcomes.
     Topic ranges must cover coherent discussions. Evidence timestamps are elapsed seconds from transcript timestamps.
     A decision is only something actually settled. An action item requires an owner or an explicit unassigned follow-up.
@@ -178,7 +180,7 @@ actor OpenAIEnricher {
           \(outputLanguage.processingInstruction)
           Preserve proper nouns in their established spelling. Do not translate names, product names, or project names.
           Deduplicate overlapping items, preserve original elapsed-second timestamps, owners, names, dates, numbers, objections, and qualifications.
-          \(Self.summaryGuidance)
+          \(summaryGuidance)
           Do not invent facts or promote a discussion into a decision. Keep topics chronological.
 
           PARTIAL INDEXES

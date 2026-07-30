@@ -33,6 +33,8 @@ struct SettingsView: View {
           DictionarySettingsPane(model: model)
         case .codex:
           CodexSettingsPane(model: model)
+        case .summaries:
+          SummariesSettingsPane(model: model)
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -125,6 +127,7 @@ private struct WindowKeyObserver: NSViewRepresentable {
 private enum SettingsPane: String, CaseIterable, Identifiable {
   case general
   case codex
+  case summaries
   case dictionary
   case microphone
   case transcriptions
@@ -144,6 +147,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case .tana: "Tana"
     case .dictionary: "Dictionary"
     case .codex: "ChatGPT"
+    case .summaries: "Summaries"
     }
   }
 
@@ -157,6 +161,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case .tana: "point.3.connected.trianglepath.dotted"
     case .dictionary: "character.book.closed"
     case .codex: "terminal"
+    case .summaries: "doc.text"
     }
   }
 }
@@ -214,30 +219,6 @@ private struct GeneralSettingsPane: View {
               .buttonStyle(.borderedProminent)
               .disabled(model.chatGPTAuthInProgress)
           }
-        }
-
-        Divider()
-
-        HStack(spacing: 16) {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("Summary language")
-              .font(.body.weight(.medium))
-            Text("The word-for-word transcript stays in its original language.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-          Spacer()
-          Picker("Summary language", selection: Binding(
-            get: { model.meetingNotesLanguage },
-            set: { model.setMeetingNotesLanguage($0) }
-          )) {
-            ForEach(MeetingNotesLanguage.allCases) { language in
-              Text(language.label).tag(language)
-            }
-          }
-          .labelsHidden()
-          .pickerStyle(.menu)
-          .fixedSize()
         }
 
         Divider()
@@ -569,6 +550,78 @@ private struct CodexSettingsPane: View {
       .padding(28)
     }
     .onAppear { model.refreshCodexModels() }
+  }
+}
+
+private struct SummariesSettingsPane: View {
+  @Bindable var model: AppModel
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 18) {
+        SettingsPaneHeader(
+          title: "Summaries",
+          subtitle: "Choose how finished meeting notes are written."
+        )
+
+        Divider()
+
+        HStack(spacing: 16) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Language")
+              .font(.body.weight(.medium))
+            Text("The word-for-word transcript stays in its original language.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          Spacer()
+          Picker("Language", selection: Binding(
+            get: { model.meetingNotesLanguage },
+            set: { model.setMeetingNotesLanguage($0) }
+          )) {
+            ForEach(MeetingNotesLanguage.allCases) { language in
+              Text(language.label).tag(language)
+            }
+          }
+          .labelsHidden()
+          .pickerStyle(.menu)
+          .fixedSize()
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Summary instructions")
+            .font(.headline)
+          Text("Describes what the meeting notes should contain and how they should read. The structural rules — grounded in the transcript, no invented facts, neutral attribution — always apply.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+          GrowingTextEditor(text: $model.summaryGuidanceDraft, minHeight: 200)
+            .padding(2)
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+              RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor))
+            }
+            .onChange(of: model.summaryGuidanceDraft) {
+              model.persistSummaryGuidanceDraft()
+            }
+
+          HStack {
+            if !model.summaryGuidanceStatusText.isEmpty {
+              Text(model.summaryGuidanceStatusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Restore Default", action: model.restoreDefaultSummaryGuidance)
+          }
+        }
+      }
+      .padding(28)
+    }
   }
 }
 

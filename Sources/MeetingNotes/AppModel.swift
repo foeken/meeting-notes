@@ -88,6 +88,8 @@ final class AppModel {
   var codexLaunchingMeetingID: UUID?
   var codexLaunchingCurrentMeeting = false
   var codexPromptDraft = CodexPromptSettingsStore.load()
+  var summaryGuidanceDraft = SummarySettingsStore.loadGuidance()
+  var summaryGuidanceStatusText = ""
   var codexPromptStatusText = ""
   var codexSummaryMessageDraft = CodexPromptSettingsStore.loadSummaryMessage()
   var codexSummaryMessageEnabled = CodexPromptSettingsStore.summaryMessageEnabled()
@@ -243,6 +245,22 @@ final class AppModel {
   func restoreDefaultCodexPrompt() {
     codexPromptDraft = CodexPromptSettingsStore.restoreDefault()
     codexPromptStatusText = "Default prompt restored."
+  }
+
+  func persistSummaryGuidanceDraft() {
+    guard !summaryGuidanceDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      summaryGuidanceStatusText = "The instructions cannot be empty."
+      return
+    }
+    SummarySettingsStore.saveGuidance(summaryGuidanceDraft)
+    if summaryGuidanceStatusText == "The instructions cannot be empty." {
+      summaryGuidanceStatusText = ""
+    }
+  }
+
+  func restoreDefaultSummaryGuidance() {
+    summaryGuidanceDraft = SummarySettingsStore.restoreDefaultGuidance()
+    summaryGuidanceStatusText = "Default instructions restored."
   }
 
   func persistCodexSummaryMessageDraft() {

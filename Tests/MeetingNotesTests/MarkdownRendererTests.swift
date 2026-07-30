@@ -2,10 +2,10 @@ import Foundation
 import Testing
 
 @Test func meetingSummaryGuidancePreservesSubstantiveContext() {
-  #expect(OpenAIEnricher.summaryGuidance.contains("250–400 words"))
-  #expect(OpenAIEnricher.summaryGuidance.contains("every major topic"))
-  #expect(OpenAIEnricher.summaryGuidance.contains("disagreement"))
-  #expect(!OpenAIEnricher.summaryGuidance.localizedLowercase.contains("concise"))
+  #expect(OpenAIEnricher.defaultSummaryGuidance.contains("250–400 words"))
+  #expect(OpenAIEnricher.defaultSummaryGuidance.contains("every major topic"))
+  #expect(OpenAIEnricher.defaultSummaryGuidance.contains("disagreement"))
+  #expect(!OpenAIEnricher.defaultSummaryGuidance.localizedLowercase.contains("concise"))
 }
 
 @testable import MeetingNotes
@@ -1241,6 +1241,26 @@ import Testing
 
   // The summary model is stored separately from the meeting-task model.
   #expect(CodexPromptSettingsStore.loadModel(from: defaults).isEmpty)
+}
+
+@Test func summaryGuidanceRoundTripsAndRestoresDefault() throws {
+  let suite = "MeetingNotesSummaryGuidanceTests-\(UUID().uuidString)"
+  let defaults = try #require(UserDefaults(suiteName: suite))
+  defer { defaults.removePersistentDomain(forName: suite) }
+
+  // Nothing stored means the built-in guidance is used.
+  #expect(SummarySettingsStore.loadGuidance(from: defaults) == OpenAIEnricher.defaultSummaryGuidance)
+
+  SummarySettingsStore.saveGuidance("Focus on decisions and risks.", to: defaults)
+  #expect(SummarySettingsStore.loadGuidance(from: defaults) == "Focus on decisions and risks.")
+
+  // Whitespace-only guidance falls back to the default rather than blanking the prompt.
+  SummarySettingsStore.saveGuidance("   \n", to: defaults)
+  #expect(SummarySettingsStore.loadGuidance(from: defaults) == OpenAIEnricher.defaultSummaryGuidance)
+
+  SummarySettingsStore.saveGuidance("Custom again.", to: defaults)
+  #expect(SummarySettingsStore.restoreDefaultGuidance(in: defaults) == OpenAIEnricher.defaultSummaryGuidance)
+  #expect(SummarySettingsStore.loadGuidance(from: defaults) == OpenAIEnricher.defaultSummaryGuidance)
 }
 
 @Test func meetingFoldersAreGroupedByIsoWeek() {
