@@ -355,6 +355,12 @@ struct MenuBarView: View {
                 if model.isMeetingFinalizing(meeting) {
                   Button("Finalizing…", systemImage: "waveform") {}
                     .disabled(true)
+                  Divider()
+                  Button(role: .destructive) {
+                    model.requestMeetingDeletion(meeting)
+                  } label: {
+                    Label("Delete meeting…", systemImage: "trash")
+                  }
                 } else if model.isMeetingRecoverable(meeting) {
                   Button {
                     model.recoverMeeting(meeting)

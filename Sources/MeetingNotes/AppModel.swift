@@ -1200,6 +1200,15 @@ final class AppModel {
   private func deleteMeeting(_ meeting: TodayMeetingSummary) async {
     state = .processing
     statusText = "Deleting \(meeting.title)…"
+    // A meeting that is still finalizing has a background task working in its
+    // folder. Stop that first, so the transcription cannot recreate files
+    // underneath the delete or resurrect the meeting afterwards.
+    if let finalization = stoppedMeetingFinalizationTasks[meeting.id] {
+      stoppedMeetingGracePeriods.remove(meeting.id)
+      finalization.cancel()
+      await finalization.value
+      pendingMeetingSummaries[meeting.id] = nil
+    }
     do {
       try await store.deleteMeeting(id: meeting.id)
       await refreshMeetingDay()
