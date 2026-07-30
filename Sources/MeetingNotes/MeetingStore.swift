@@ -1,5 +1,15 @@
 import Foundation
 
+/// How much disk the meeting storage uses, split the way users think about
+/// it: documents worth keeping, and audio that can be cleaned up.
+struct MeetingStorageUsage: Equatable, Sendable {
+  var documentBytes: Int64 = 0
+  var archiveAudioBytes: Int64 = 0
+  var recoveryAudioBytes: Int64 = 0
+  var audioBytes: Int64 { archiveAudioBytes + recoveryAudioBytes }
+  var totalBytes: Int64 { documentBytes + audioBytes }
+}
+
 actor MeetingStore {
   struct StoppedMeeting: Sendable {
     let document: MeetingDocument
@@ -342,6 +352,73 @@ actor MeetingStore {
         return document.id
       }
       .count
+  }
+
+  /// Sizes everything under both roots, split into documents and audio.
+  /// Audio is reported separately per root because archive audio (retained on
+  /// purpose) and spool audio (recovery tracks for unfinished captures) have
+  /// different cleanup stories.
+  func storageUsage() -> MeetingStorageUsage {
+    let manager = FileManager.default
+    var usage = MeetingStorageUsage()
+    var seenRoots = Set<String>()
+    for base in [root, archiveRoot] {
+      guard seenRoots.insert(base.standardizedFileURL.path).inserted else { continue }
+      let isArchive = base.standardizedFileURL == archiveRoot.standardizedFileURL
+        && root.standardizedFileURL != archiveRoot.standardizedFileURL
+      guard let enumerator = manager.enumerator(
+        at: base, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey])
+      else { continue }
+      for case let url as URL in enumerator {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+          values.isRegularFile == true
+        else { continue }
+        let size = Int64(values.fileSize ?? 0)
+        if url.pathExtension.lowercased() == "wav" {
+          if isArchive {
+            usage.archiveAudioBytes += size
+          } else {
+            usage.recoveryAudioBytes += size
+          }
+        } else {
+          usage.documentBytes += size
+        }
+      }
+    }
+    return usage
+  }
+
+  /// Deletes every audio file that is safe to delete: retained WAVs of
+  /// *complete* meetings in either root. Recovery audio of unfinished
+  /// captures is left alone — it is the only path back to a transcript.
+  /// Cleaned archive folders re-sync so the remote copy converges.
+  func cleanUpAudioFiles() async -> Int64 {
+    let manager = FileManager.default
+    var freedBytes: Int64 = 0
+    for stateURL in allStateURLs() {
+      guard let data = try? Data(contentsOf: stateURL),
+        let document = try? decoder.decode(MeetingDocument.self, from: data),
+        document.status == .complete
+      else { continue }
+      let targetFolder = stateURL.deletingLastPathComponent()
+      var removedAny = false
+      for name in ["microphone.wav", "system.wav"] {
+        let url = targetFolder.appending(path: name)
+        guard manager.fileExists(atPath: url.path) else { continue }
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        do {
+          try manager.removeItem(at: url)
+          freedBytes += size
+          removedAny = true
+        } catch { continue }
+      }
+      if removedAny, isArchiveFolder(targetFolder) {
+        try? Data(UUID().uuidString.utf8).write(
+          to: targetFolder.appending(path: RemoteSyncService.folderMarker), options: .atomic)
+        await sync.enqueue(folder: targetFolder, runHookAfterSync: false)
+      }
+    }
+    return freedBytes
   }
 
   /// Moves finished meetings from one archive root to another, preserving the

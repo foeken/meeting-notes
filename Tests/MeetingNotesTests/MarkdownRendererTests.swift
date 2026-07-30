@@ -479,6 +479,44 @@ import Testing
       .hasPrefix(archive.resolvingSymlinksInPath().path))
 }
 
+@Test func audioCleanupRemovesOnlyFinishedMeetingAudio() async throws {
+  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: base) }
+  let spool = base.appending(path: "spool")
+  let archive = base.appending(path: "archive")
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: spool, archiveRoot: archive, sync: sync)
+
+  // A finished meeting with retained audio in the archive.
+  _ = try await store.begin(title: "Finished with audio", calendar: nil)
+  let finishedMicrophone = try #require(await store.audioURL(named: "microphone.wav"))
+  try Data(repeating: 0, count: 2_000).write(to: finishedMicrophone)
+  try await store.finalize(insights: nil)
+  let archivedFolder = try #require(await store.currentFolder())
+  let archivedAudio = archivedFolder.appending(path: "microphone.wav")
+  #expect(FileManager.default.fileExists(atPath: archivedAudio.path))
+
+  // An interrupted capture whose recovery audio must survive the cleanup.
+  _ = try await store.begin(title: "Interrupted capture", calendar: nil)
+  let recoveryMicrophone = try #require(await store.audioURL(named: "microphone.wav"))
+  try Data(repeating: 0, count: 3_000).write(to: recoveryMicrophone)
+  try await store.setStatus(.failed)
+
+  let usageBefore = await store.storageUsage()
+  #expect(usageBefore.archiveAudioBytes == 2_000)
+  #expect(usageBefore.recoveryAudioBytes == 3_000)
+  #expect(usageBefore.documentBytes > 0)
+
+  let freed = await store.cleanUpAudioFiles()
+  #expect(freed == 2_000)
+  #expect(!FileManager.default.fileExists(atPath: archivedAudio.path))
+  #expect(FileManager.default.fileExists(atPath: recoveryMicrophone.path))
+
+  let usageAfter = await store.storageUsage()
+  #expect(usageAfter.archiveAudioBytes == 0)
+  #expect(usageAfter.recoveryAudioBytes == 3_000)
+}
+
 @Test func successfulProcessingCanRemoveRecoveryAudio() async throws {
   let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }

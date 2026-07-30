@@ -491,6 +491,46 @@ private struct StorageSettingsPane: View {
 
         Divider()
 
+        Text("Disk usage")
+          .font(.headline)
+
+        if let usage = model.storageUsage {
+          StorageUsageBar(usage: usage)
+
+          HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Clean up audio")
+                .font(.body.weight(.medium))
+              Text("Deletes audio recordings of finished meetings. Recovery audio for unfinished captures is kept.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button(model.audioCleanupInProgress ? "Cleaning up…" : "Clean Up…") {
+              model.requestAudioCleanup()
+            }
+            .disabled(model.audioCleanupInProgress || usage.audioBytes == 0)
+          }
+
+          if !model.audioCleanupStatusText.isEmpty {
+            Text(model.audioCleanupStatusText)
+              .font(.caption)
+              .foregroundStyle(
+                model.audioCleanupStatusText.contains("pending") ? .orange : .secondary)
+          }
+        } else {
+          HStack(spacing: 8) {
+            ProgressView()
+              .controlSize(.small)
+            Text("Measuring…")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+
+        Divider()
+
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
             Text("Sync to a remote Mac")
@@ -545,8 +585,72 @@ private struct StorageSettingsPane: View {
     .onChange(of: model.remoteSyncEnabled, model.scheduleArchiveSettingsSave)
     .onChange(of: model.remoteHostDraft, model.scheduleArchiveSettingsSave)
     .onChange(of: model.remotePathDraft, model.scheduleArchiveSettingsSave)
+    .onAppear(perform: model.refreshStorageUsage)
   }
 
+}
+
+/// A macOS-style segmented capacity bar: documents, then audio, on a neutral
+/// track, with a legend underneath.
+private struct StorageUsageBar: View {
+  let usage: MeetingStorageUsage
+
+  private func formatted(_ bytes: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      GeometryReader { geometry in
+        let total = max(Double(usage.totalBytes), 1)
+        let documentWidth = geometry.size.width * Double(usage.documentBytes) / total
+        let audioWidth = geometry.size.width * Double(usage.audioBytes) / total
+        ZStack(alignment: .leading) {
+          Capsule()
+            .fill(.quaternary.opacity(0.5))
+          HStack(spacing: usage.documentBytes > 0 && usage.audioBytes > 0 ? 2 : 0) {
+            if usage.documentBytes > 0 {
+              Rectangle()
+                .fill(Color.accentColor)
+                .frame(width: max(documentWidth, 3))
+            }
+            if usage.audioBytes > 0 {
+              Rectangle()
+                .fill(.orange)
+                .frame(width: max(audioWidth, 3))
+            }
+          }
+          .clipShape(Capsule())
+        }
+      }
+      .frame(height: 10)
+
+      HStack(spacing: 16) {
+        legendEntry(color: Color.accentColor, label: "Notes and transcripts",
+          value: formatted(usage.documentBytes))
+        if usage.audioBytes > 0 {
+          legendEntry(color: .orange, label: "Audio", value: formatted(usage.audioBytes))
+        }
+        Spacer()
+        Text(formatted(usage.totalBytes) + " total")
+          .font(.caption.weight(.medium))
+          .foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private func legendEntry(color: Color, label: String, value: String) -> some View {
+    HStack(spacing: 5) {
+      Circle()
+        .fill(color)
+        .frame(width: 7, height: 7)
+      Text(label)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      Text(value)
+        .font(.caption.weight(.medium))
+    }
+  }
 }
 
 private struct HookSettingsPane: View {

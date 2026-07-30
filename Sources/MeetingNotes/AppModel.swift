@@ -73,6 +73,9 @@ final class AppModel {
   var automaticTranscriptDeletionEnabled = true
   var transcriptRetentionDays = TranscriptRetentionSettings.defaultDays
   var transcriptRetentionStatusText = ""
+  var storageUsage: MeetingStorageUsage?
+  var audioCleanupInProgress = false
+  var audioCleanupStatusText = ""
   var tanaEnabled = false
   var tanaConnected = false
   var tanaConnectionInProgress = false
@@ -1115,6 +1118,55 @@ final class AppModel {
     } catch {
       if reportStatus {
         transcriptRetentionStatusText = "Cleanup failed: \(error.localizedDescription)"
+      }
+    }
+  }
+
+  func refreshStorageUsage() {
+    Task {
+      storageUsage = await store.storageUsage()
+    }
+  }
+
+  /// Deleting audio is irreversible, so it is confirmed first.
+  func requestAudioCleanup() {
+    guard !audioCleanupInProgress else { return }
+    let audioBytes = storageUsage?.audioBytes ?? 0
+    let alert = NSAlert()
+    alert.messageText = "Delete meeting audio?"
+    alert.informativeText = """
+      Removes \(ByteCountFormatter.string(fromByteCount: audioBytes, countStyle: .file)) \
+      of audio recordings from finished meetings, on this Mac and the synced \
+      archive. Notes and transcripts are kept. This cannot be undone.
+      """
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "Delete Audio")
+    alert.addButton(withTitle: "Cancel")
+    NSApp.activate(ignoringOtherApps: true)
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    cleanUpAudioFiles()
+  }
+
+  /// Deletes retained audio of finished meetings. Recovery audio of
+  /// unfinished captures stays: it is the only path back to a transcript.
+  func cleanUpAudioFiles() {
+    guard !audioCleanupInProgress else { return }
+    audioCleanupInProgress = true
+    audioCleanupStatusText = "Cleaning up audio…"
+    Task {
+      let freed = await store.cleanUpAudioFiles()
+      await remoteSync.flush()
+      storageUsage = await store.storageUsage()
+      audioCleanupInProgress = false
+      if freed > 0 {
+        let formatted = ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)
+        if let error = await remoteSync.lastError {
+          audioCleanupStatusText = "Freed \(formatted); archive cleanup is pending: \(error)"
+        } else {
+          audioCleanupStatusText = "Freed \(formatted)."
+        }
+      } else {
+        audioCleanupStatusText = "No removable audio found."
       }
     }
   }
