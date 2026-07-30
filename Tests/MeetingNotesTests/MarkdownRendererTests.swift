@@ -374,6 +374,111 @@ import Testing
   #expect(FileManager.default.fileExists(atPath: transcriptURL.path))
 }
 
+@Test func finalizationMovesTheMeetingIntoTheArchive() async throws {
+  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: base) }
+  let spool = base.appending(path: "spool")
+  let archive = base.appending(path: "archive")
+  // The temporary directory reaches /var through a symlink; folders coming
+  // back from the store may be reported as /private/var.
+  func resolved(_ url: URL) -> String { url.resolvingSymlinksInPath().path }
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: spool, archiveRoot: archive, sync: sync)
+
+  let document = try await store.begin(title: "Consolidated", calendar: nil)
+  let spoolFolder = try #require(await store.currentFolder())
+  #expect(resolved(spoolFolder).hasPrefix(resolved(spool)))
+
+  try await store.finalize(insights: nil)
+
+  // The invariant: a folder in the spool is active or recoverable; a folder
+  // in the archive is complete.
+  let archivedFolder = try #require(await store.currentFolder())
+  #expect(resolved(archivedFolder).hasPrefix(resolved(archive)))
+  #expect(!FileManager.default.fileExists(atPath: spoolFolder.path))
+
+  // The archive copy hides its state file and shows only the documents.
+  #expect(
+    FileManager.default.fileExists(
+      atPath: archivedFolder.appending(path: ".meeting.json").path))
+  #expect(
+    !FileManager.default.fileExists(
+      atPath: archivedFolder.appending(path: "meeting.json").path))
+  #expect(
+    FileManager.default.fileExists(atPath: archivedFolder.appending(path: "meeting.md").path))
+
+  // Reads, rename, and delete all keep working on the archived meeting.
+  let today = await store.completedMeetings(on: document.startedAt)
+  #expect(today.map(\.id) == [document.id])
+  try await store.renameCompletedMeeting(id: document.id, title: "Renamed after move")
+  let renamed = try await store.completedMeeting(id: document.id)
+  #expect(renamed.document.title == "Renamed after move")
+  #expect(resolved(renamed.folder).hasPrefix(resolved(archive)))
+}
+
+@Test func interruptedCaptureStaysInTheSpoolForRecovery() async throws {
+  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: base) }
+  let spool = base.appending(path: "spool")
+  let archive = base.appending(path: "archive")
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: spool, archiveRoot: archive, sync: sync)
+
+  _ = try await store.begin(title: "Interrupted", calendar: nil)
+  let folder = try #require(await store.currentFolder())
+  try await store.setStatus(.failed)
+
+  // A failed capture must not be promoted: recovery scans only the spool.
+  #expect(FileManager.default.fileExists(atPath: folder.path))
+  #expect(folder.resolvingSymlinksInPath().path.hasPrefix(spool.resolvingSymlinksInPath().path))
+}
+
+@Test func startupPromotionMovesCompletedMeetingsAndPrefersTheArchiveCopy() async throws {
+  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: base) }
+  let spool = base.appending(path: "spool")
+  let archive = base.appending(path: "archive")
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+
+  // A completed meeting written by an older build, still in the spool.
+  let legacyStore = MeetingStore(root: spool, sync: sync)
+  let stranded = try await legacyStore.begin(title: "Stranded", calendar: nil)
+  try await legacyStore.finalize(insights: nil)
+  let strandedSpoolFolder = try #require(await legacyStore.currentFolder())
+
+  // A duplicate that exists in both places: archive copy must win.
+  let duplicate = try await legacyStore.begin(title: "Duplicated", calendar: nil)
+  try await legacyStore.finalize(insights: nil)
+  let duplicateSpoolFolder = try #require(await legacyStore.currentFolder())
+  let duplicateRelative = duplicateSpoolFolder.pathComponents.suffix(4).joined(separator: "/")
+  let duplicateArchiveFolder = archive.appending(path: duplicateRelative)
+  try FileManager.default.createDirectory(
+    at: duplicateArchiveFolder, withIntermediateDirectories: true)
+  for file in ["meeting.json", "meeting.md", "transcript.md"] {
+    let source = duplicateSpoolFolder.appending(path: file)
+    if FileManager.default.fileExists(atPath: source.path) {
+      try FileManager.default.copyItem(
+        at: source, to: duplicateArchiveFolder.appending(path: file))
+    }
+  }
+
+  let store = MeetingStore(root: spool, archiveRoot: archive, sync: sync)
+  let moved = await store.promoteCompletedSpoolMeetings()
+  #expect(moved == 1)
+
+  // Both spool copies are gone; both meetings are found in the archive.
+  #expect(!FileManager.default.fileExists(atPath: strandedSpoolFolder.path))
+  #expect(!FileManager.default.fileExists(atPath: duplicateSpoolFolder.path))
+  let strandedResult = try await store.completedMeeting(id: stranded.id)
+  #expect(
+    strandedResult.folder.resolvingSymlinksInPath().path
+      .hasPrefix(archive.resolvingSymlinksInPath().path))
+  let duplicateResult = try await store.completedMeeting(id: duplicate.id)
+  #expect(
+    duplicateResult.folder.resolvingSymlinksInPath().path
+      .hasPrefix(archive.resolvingSymlinksInPath().path))
+}
+
 @Test func successfulProcessingCanRemoveRecoveryAudio() async throws {
   let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }

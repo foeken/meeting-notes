@@ -119,21 +119,24 @@ and `transcript.md` for complete timestamped evidence. Partial speech in
 ## File layout
 
 ```text
-Private spool on the recording Mac:
+Private spool on the recording Mac (active and interrupted captures only):
   2026/07/14/1030-roadmap-planning-a1b2c3d4/
     meeting.json
     live.md          # present during capture and processing
     microphone.wav   # temporary recovery track; deleted after success
     system.wav       # temporary recovery track; deleted after success
 
-Configured archive (local or remote):
+Configured archive (the only home of a finished meeting):
   2026/07/14/
     1030-roadmap-planning-a1b2c3d4/
       meeting.md       # structured meeting notes
       transcript.md    # full timestamped evidence
-      live.md          # present only until final transcription succeeds
-      meeting.json     # crash recovery/state
+      .meeting.json    # hidden machine state (raw transcript, metadata)
 ```
+
+When a recording finishes, its folder moves from the spool into the archive,
+so a completed meeting exists in exactly one place. The remote copy receives
+only the Markdown documents; the hidden state file stays on this Mac.
 
 ## Current limits
 

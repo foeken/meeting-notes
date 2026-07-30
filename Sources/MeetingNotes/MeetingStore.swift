@@ -6,19 +6,75 @@ actor MeetingStore {
     let folder: URL
   }
 
+  /// The private spool: live captures and interrupted captures awaiting
+  /// recovery. A finished meeting moves out of here permanently.
   private let root: URL
+  /// The user-facing archive: finished meetings, exactly one copy.
+  private var archiveRoot: URL
   private let sync: RemoteSyncService
   private let encoder = JSONEncoder()
   private let decoder = JSONDecoder()
   private var meeting: MeetingDocument?
   private var folder: URL?
 
-  init(root: URL, sync: RemoteSyncService) {
+  /// `archiveRoot` defaults to `root`, which disables promotion entirely: a
+  /// store whose two roots coincide treats every folder as already archived.
+  /// The app always passes a distinct archive root.
+  init(root: URL, archiveRoot: URL? = nil, sync: RemoteSyncService) {
     self.root = root
+    self.archiveRoot = archiveRoot ?? root
     self.sync = sync
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     encoder.dateEncodingStrategy = .iso8601
     decoder.dateDecodingStrategy = .iso8601
+  }
+
+  func updateArchiveRoot(_ url: URL) {
+    archiveRoot = url
+  }
+
+  static let stateFileName = "meeting.json"
+  /// The archive keeps its state file hidden so a browsing user sees only the
+  /// Markdown documents.
+  static let hiddenStateFileName = ".meeting.json"
+  /// Meeting folders are `year/month/day/meeting`, four components deep.
+  static let meetingPathComponentCount = 4
+
+  private static func isStateFile(_ url: URL) -> Bool {
+    let name = url.lastPathComponent
+    return name == stateFileName || name == hiddenStateFileName
+  }
+
+  /// The state file inside `folder`, preferring the hidden archive name.
+  private func stateURL(in folder: URL) -> URL {
+    let hidden = folder.appending(path: Self.hiddenStateFileName)
+    if FileManager.default.fileExists(atPath: hidden.path) { return hidden }
+    return folder.appending(path: Self.stateFileName)
+  }
+
+  private func isArchiveFolder(_ folder: URL) -> Bool {
+    folder.standardizedFileURL.path.hasPrefix(archiveRoot.standardizedFileURL.path + "/")
+  }
+
+  private func baseRoot(of folder: URL) -> URL {
+    isArchiveFolder(folder) ? archiveRoot : root
+  }
+
+  /// Every meeting state file across both roots: the spool for live and
+  /// recoverable captures, the archive for finished meetings.
+  private func allStateURLs(keys: [URLResourceKey]? = nil) -> [URL] {
+    let manager = FileManager.default
+    var seenRoots = Set<String>()
+    var results: [URL] = []
+    for base in [root, archiveRoot] {
+      guard seenRoots.insert(base.standardizedFileURL.path).inserted else { continue }
+      guard let enumerator = manager.enumerator(at: base, includingPropertiesForKeys: keys)
+      else { continue }
+      for case let url as URL in enumerator where Self.isStateFile(url) {
+        results.append(url)
+      }
+    }
+    return results
   }
 
   func begin(title: String, calendar: CalendarMetadata?) throws -> MeetingDocument {
@@ -40,7 +96,7 @@ actor MeetingStore {
   }
 
   func load(folder: URL) throws -> MeetingDocument {
-    let data = try Data(contentsOf: folder.appending(path: "meeting.json"))
+    let data = try Data(contentsOf: stateURL(in: folder))
     let document = try decoder.decode(MeetingDocument.self, from: data)
     self.folder = folder
     meeting = document
@@ -49,10 +105,7 @@ actor MeetingStore {
 
   /// Finds a completed meeting without changing the active capture held by the store.
   func completedMeeting(id: UUID) throws -> (document: MeetingDocument, folder: URL) {
-    guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
-    else { throw CocoaError(.fileNoSuchFile) }
-    let target = enumerator.compactMap { $0 as? URL }
-      .filter { $0.lastPathComponent == "meeting.json" }
+    let target = allStateURLs()
       .compactMap { url -> (MeetingDocument, URL)? in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
@@ -106,15 +159,16 @@ actor MeetingStore {
   ) throws -> MeetingDocument {
     var document = try decoder.decode(
       MeetingDocument.self,
-      from: Data(contentsOf: targetFolder.appending(path: "meeting.json")))
+      from: Data(contentsOf: stateURL(in: targetFolder)))
     document.transcript = turns
     document.insights = insights
     document.status = .complete
     document.endedAt = Date()
     try persist(document, in: targetFolder)
+    let finalFolder = promoteToArchiveIfPossible(document: document, from: targetFolder)
     if meeting?.id == document.id {
       meeting = document
-      folder = targetFolder
+      folder = finalFolder
       try? persistPointer(active: false, captureState: MeetingDocument.Status.complete.rawValue)
     }
     return document
@@ -123,7 +177,7 @@ actor MeetingStore {
   func markStoppedMeetingFailed(in targetFolder: URL) throws {
     var document = try decoder.decode(
       MeetingDocument.self,
-      from: Data(contentsOf: targetFolder.appending(path: "meeting.json")))
+      from: Data(contentsOf: stateURL(in: targetFolder)))
     document.status = .failed
     document.endedAt = Date()
     try persist(document, in: targetFolder)
@@ -131,6 +185,222 @@ actor MeetingStore {
       meeting = document
       folder = targetFolder
       try? persistPointer(active: false, captureState: MeetingDocument.Status.failed.rawValue)
+    }
+  }
+
+  /// Moves a finished meeting out of the spool into the archive, so a
+  /// completed meeting exists in exactly one place. The state file is renamed
+  /// to its hidden archive form during the move. When the archive volume is
+  /// unavailable the meeting simply stays in the spool; the startup migration
+  /// retries it on the next launch.
+  @discardableResult
+  private func promoteToArchiveIfPossible(document: MeetingDocument, from spoolFolder: URL) -> URL {
+    guard document.status == .complete, !isArchiveFolder(spoolFolder) else { return spoolFolder }
+    let manager = FileManager.default
+    // The archive path is derived from the meeting's own start date rather
+    // than the spool's relative path, so a spool folder written in another
+    // layout (the week-based experiment) still lands in the archive's
+    // canonical `year/month/day` shape.
+    let relative = DateFormatter.folderDay.string(from: document.startedAt)
+      + "/" + spoolFolder.lastPathComponent
+    let destination = archiveRoot.appending(path: relative, directoryHint: .isDirectory)
+    do {
+      guard !manager.fileExists(atPath: destination.path) else { return spoolFolder }
+      try manager.createDirectory(
+        at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+      // Hide the state file before the move so the archive never shows a
+      // visible meeting.json, not even briefly.
+      let visibleState = spoolFolder.appending(path: Self.stateFileName)
+      if manager.fileExists(atPath: visibleState.path) {
+        try manager.moveItem(
+          at: visibleState, to: spoolFolder.appending(path: Self.hiddenStateFileName))
+      }
+      try manager.moveItem(at: spoolFolder, to: destination)
+      try? Data(UUID().uuidString.utf8).write(
+        to: destination.appending(path: RemoteSyncService.folderMarker), options: .atomic)
+      Task { await sync.enqueue(folder: destination, runHookAfterSync: true) }
+      return destination
+    } catch {
+      // The meeting stays fully usable in the spool; nothing was lost.
+      return spoolFolder
+    }
+  }
+
+  /// Startup migration: every completed meeting still in the spool moves to
+  /// the archive. When the archive already holds the same meeting ID, the
+  /// archive copy wins (it is the synced, user-visible one) and the spool
+  /// duplicate is removed. Interrupted runs simply resume on the next launch.
+  @discardableResult
+  func promoteCompletedSpoolMeetings() async -> Int {
+    let manager = FileManager.default
+    guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
+      return 0
+    }
+    // Only a *complete* archive copy outranks a complete spool copy. The old
+    // sync also mirrored in-progress captures into the archive, and such a
+    // stale mirror must never win over the finished meeting.
+    var archivedComplete = Set<UUID>()
+    var archivedStale: [UUID: URL] = [:]
+    for url in allStateURLs() where isArchiveFolder(url) {
+      guard let data = try? Data(contentsOf: url),
+        let document = try? decoder.decode(MeetingDocument.self, from: data)
+      else { continue }
+      if document.status == .complete {
+        archivedComplete.insert(document.id)
+      } else {
+        archivedStale[document.id] = url.deletingLastPathComponent()
+      }
+    }
+
+    let spoolCompleted = enumerator.compactMap { $0 as? URL }
+      .filter { Self.isStateFile($0) }
+      .compactMap { url -> (URL, MeetingDocument)? in
+        guard let data = try? Data(contentsOf: url),
+          let document = try? decoder.decode(MeetingDocument.self, from: data),
+          document.status == .complete
+        else { return nil }
+        return (url.deletingLastPathComponent(), document)
+      }
+
+    var movedCount = 0
+    for (spoolFolder, document) in spoolCompleted {
+      if archivedComplete.contains(document.id) {
+        // The archive copy is authoritative; the spool duplicate only wastes
+        // space and re-creates the two-truths problem.
+        try? manager.removeItem(at: spoolFolder)
+        continue
+      }
+      // A stale non-complete mirror gives way to the finished meeting.
+      if let staleFolder = archivedStale[document.id] {
+        try? manager.removeItem(at: staleFolder)
+      }
+      let destination = promoteToArchiveIfPossible(document: document, from: spoolFolder)
+      if destination.standardizedFileURL != spoolFolder.standardizedFileURL { movedCount += 1 }
+    }
+    removeEmptySpoolDayDirectories()
+    return movedCount
+  }
+
+  /// One-time cleanup of archives written by the mirror-everything sync:
+  /// finished meetings get their state file hidden, and stale copies of
+  /// meetings that are *not* finished (the old sync mirrored those too) are
+  /// removed when the spool still holds the authoritative capture.
+  func normalizeArchivedMeetingFolders() async {
+    let manager = FileManager.default
+    guard root.standardizedFileURL != archiveRoot.standardizedFileURL,
+      let enumerator = manager.enumerator(at: archiveRoot, includingPropertiesForKeys: nil)
+    else { return }
+
+    let spoolStateURLs = (manager.enumerator(at: root, includingPropertiesForKeys: nil)?
+      .compactMap { $0 as? URL } ?? [])
+      .filter { Self.isStateFile($0) }
+    var spoolIDs: [UUID: URL] = [:]
+    for url in spoolStateURLs {
+      guard let data = try? Data(contentsOf: url),
+        let document = try? decoder.decode(MeetingDocument.self, from: data)
+      else { continue }
+      spoolIDs[document.id] = url.deletingLastPathComponent()
+    }
+
+    let archiveStateURLs = enumerator.compactMap { $0 as? URL }.filter { Self.isStateFile($0) }
+    for url in archiveStateURLs {
+      guard let data = try? Data(contentsOf: url),
+        let document = try? decoder.decode(MeetingDocument.self, from: data)
+      else { continue }
+      let archiveFolder = url.deletingLastPathComponent()
+      if document.status == .complete {
+        // The archive shows only the documents; its state file is hidden.
+        if url.lastPathComponent == Self.stateFileName {
+          let hidden = archiveFolder.appending(path: Self.hiddenStateFileName)
+          if !manager.fileExists(atPath: hidden.path) {
+            try? manager.moveItem(at: url, to: hidden)
+          }
+        }
+      } else if spoolIDs[document.id] != nil {
+        // A non-complete meeting in the archive is a stale mirror from the
+        // old sync. The spool still holds the authoritative capture, so the
+        // mirror is safe to drop; it would otherwise shadow the invariant
+        // that everything in the archive is finished.
+        try? manager.removeItem(at: archiveFolder)
+      }
+    }
+  }
+
+  /// Finished meetings inside `archive`, counted without touching anything.
+  func archivedMeetingCount(in archive: URL) -> Int {
+    let manager = FileManager.default
+    guard let enumerator = manager.enumerator(at: archive, includingPropertiesForKeys: nil) else {
+      return 0
+    }
+    return enumerator.compactMap { $0 as? URL }
+      .filter { Self.isStateFile($0) }
+      .compactMap { url -> UUID? in
+        guard let data = try? Data(contentsOf: url),
+          let document = try? decoder.decode(MeetingDocument.self, from: data),
+          document.status == .complete
+        else { return nil }
+        return document.id
+      }
+      .count
+  }
+
+  /// Moves finished meetings from one archive root to another, preserving the
+  /// relative `year/month/day/meeting` path. Move-only: content is never
+  /// rewritten, and an existing destination folder is left untouched.
+  @discardableResult
+  func relocateArchivedMeetings(from oldRoot: URL, to newRoot: URL) -> Int {
+    let manager = FileManager.default
+    guard let enumerator = manager.enumerator(at: oldRoot, includingPropertiesForKeys: nil) else {
+      return 0
+    }
+    let folders = enumerator.compactMap { $0 as? URL }
+      .filter { Self.isStateFile($0) }
+      .map { $0.deletingLastPathComponent() }
+    var movedCount = 0
+    for source in folders {
+      let relative = source.pathComponents
+        .suffix(Self.meetingPathComponentCount).joined(separator: "/")
+      let destination = newRoot.appending(path: relative, directoryHint: .isDirectory)
+      guard !manager.fileExists(atPath: destination.path) else { continue }
+      do {
+        try manager.createDirectory(
+          at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try manager.moveItem(at: source, to: destination)
+        movedCount += 1
+        if folder?.standardizedFileURL == source.standardizedFileURL {
+          folder = destination
+        }
+      } catch { continue }
+    }
+    return movedCount
+  }
+
+  /// Clears out the empty `year/month/day` shells the promotions leave behind.
+  /// Only directories holding nothing but Finder's own files are removed.
+  private func removeEmptySpoolDayDirectories() {
+    let manager = FileManager.default
+    let disposable: Set<String> = [".DS_Store"]
+    func removeIfEmpty(_ directory: URL) {
+      guard let entries = try? manager.contentsOfDirectory(
+        at: directory, includingPropertiesForKeys: nil),
+        entries.allSatisfy({ disposable.contains($0.lastPathComponent) })
+      else { return }
+      try? manager.removeItem(at: directory)
+    }
+    guard let years = try? manager.contentsOfDirectory(
+      at: root, includingPropertiesForKeys: nil) else { return }
+    for year in years where year.hasDirectoryPath {
+      guard year.lastPathComponent.count == 4,
+        year.lastPathComponent.allSatisfy(\.isNumber) else { continue }
+      let months = (try? manager.contentsOfDirectory(
+        at: year, includingPropertiesForKeys: nil)) ?? []
+      for month in months where month.hasDirectoryPath {
+        let days = (try? manager.contentsOfDirectory(
+          at: month, includingPropertiesForKeys: nil)) ?? []
+        for day in days where day.hasDirectoryPath { removeIfEmpty(day) }
+        removeIfEmpty(month)
+      }
+      removeIfEmpty(year)
     }
   }
 
@@ -153,6 +423,9 @@ actor MeetingStore {
     meeting?.status = .complete
     meeting?.endedAt = Date()
     try persist()
+    if let meeting, let folder {
+      self.folder = promoteToArchiveIfPossible(document: meeting, from: folder)
+    }
     try persistPointer(active: false, captureState: "complete")
   }
 
@@ -161,7 +434,12 @@ actor MeetingStore {
     meeting?.status = status
     if status == .complete || status == .failed { meeting?.endedAt = Date() }
     try persist()
-    if status == .complete { try persistPointer(active: false, captureState: "complete") }
+    if status == .complete {
+      if let meeting, let folder {
+        self.folder = promoteToArchiveIfPossible(document: meeting, from: folder)
+      }
+      try persistPointer(active: false, captureState: "complete")
+    }
   }
 
   func updateTitle(_ title: String, captureState: String) throws {
@@ -186,7 +464,7 @@ actor MeetingStore {
   ) throws {
     var document = try decoder.decode(
       MeetingDocument.self,
-      from: Data(contentsOf: targetFolder.appending(path: "meeting.json")))
+      from: Data(contentsOf: stateURL(in: targetFolder)))
     guard document.id == meetingID, document.status == .complete else {
       throw NSError(
         domain: "MeetingStore", code: 11,
@@ -207,10 +485,7 @@ actor MeetingStore {
       return
     }
 
-    guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
-    else { throw CocoaError(.fileNoSuchFile) }
-    guard let target = enumerator.compactMap({ $0 as? URL })
-      .filter({ $0.lastPathComponent == "meeting.json" })
+    guard let target = allStateURLs()
       .first(where: { url in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data)
@@ -266,13 +541,15 @@ actor MeetingStore {
   private func recoverableFolders(
     excluding excludedIDs: Set<UUID> = []
   ) -> [(folder: URL, document: MeetingDocument, modifiedAt: Date)] {
+    // Recovery only ever concerns the spool: a meeting in the archive is
+    // complete by definition.
     let manager = FileManager.default
     guard
       let enumerator = manager.enumerator(
         at: root, includingPropertiesForKeys: [.contentModificationDateKey])
     else { return [] }
     return enumerator.compactMap { $0 as? URL }
-      .filter { $0.lastPathComponent == "meeting.json" }
+      .filter { Self.isStateFile($0) }
       .compactMap { url -> (URL, MeetingDocument, Date)? in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
@@ -311,12 +588,7 @@ actor MeetingStore {
   }
 
   func completedMeetingFoldersAwaitingInsights(before cutoff: Date) -> [URL] {
-    let manager = FileManager.default
-    guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
-      return []
-    }
-    return enumerator.compactMap { $0 as? URL }
-      .filter { $0.lastPathComponent == "meeting.json" }
+    return allStateURLs()
       .compactMap { url -> (URL, Date)? in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
@@ -334,12 +606,7 @@ actor MeetingStore {
   }
 
   func completedMeetings(on date: Date, calendar: Calendar = .current) -> [MeetingDocument] {
-    let manager = FileManager.default
-    guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
-      return []
-    }
-    return enumerator.compactMap { $0 as? URL }
-      .filter { $0.lastPathComponent == "meeting.json" }
+    return allStateURLs()
       .compactMap { url -> MeetingDocument? in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
@@ -354,12 +621,7 @@ actor MeetingStore {
   /// Includes completed meetings plus durable captures that can still be
   /// finalized. This keeps interrupted work visible after an app restart.
   func meetingsForDisplay(on date: Date, calendar: Calendar = .current) -> [MeetingDocument] {
-    let manager = FileManager.default
-    guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
-      return []
-    }
-    return enumerator.compactMap { $0 as? URL }
-      .filter { $0.lastPathComponent == "meeting.json" }
+    return allStateURLs()
       .compactMap { url -> MeetingDocument? in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
@@ -383,12 +645,7 @@ actor MeetingStore {
   }
 
   func normalizeCompletedMeetingFolders() async {
-    let manager = FileManager.default
-    guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
-      return
-    }
-    let mismatches = enumerator.compactMap { $0 as? URL }
-      .filter { $0.lastPathComponent == "meeting.json" }
+    let mismatches = allStateURLs()
       .compactMap { stateURL -> (UUID, String)? in
         guard let data = try? Data(contentsOf: stateURL),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
@@ -409,12 +666,7 @@ actor MeetingStore {
 
   /// Rewrites older meeting documents into the current neutral-speaker schema.
   func normalizeMeetingDocuments() async {
-    let manager = FileManager.default
-    guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
-      return
-    }
-    let stateURLs = enumerator.compactMap { $0 as? URL }
-      .filter { $0.lastPathComponent == "meeting.json" }
+    let stateURLs = allStateURLs()
 
     for stateURL in stateURLs {
       guard let data = try? Data(contentsOf: stateURL),
@@ -460,12 +712,7 @@ actor MeetingStore {
   /// converge on the same retained data.
   func purgeExpiredTranscripts(before cutoff: Date, now: Date = Date()) async throws -> Int {
     let manager = FileManager.default
-    guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
-      return 0
-    }
-
-    let targets = enumerator.compactMap { $0 as? URL }
-      .filter { $0.lastPathComponent == "meeting.json" }
+    let targets = allStateURLs()
       .compactMap { stateURL -> (URL, MeetingDocument)? in
         guard let data = try? Data(contentsOf: stateURL),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
@@ -489,7 +736,7 @@ actor MeetingStore {
       document.transcript = []
       document.transcriptDeletedAt = document.transcriptDeletedAt ?? now
       try atomicWrite(
-        encoder.encode(document), to: targetFolder.appending(path: "meeting.json"))
+        encoder.encode(document), to: stateURL(in: targetFolder))
       try atomicWrite(
         Data(MarkdownRenderer.renderMeeting(document).utf8),
         to: targetFolder.appending(path: "meeting.md"))
@@ -516,10 +763,7 @@ actor MeetingStore {
         to: root.appending(path: RemoteSyncService.pointerMarker), options: .atomic)
       await sync.enqueuePointer(root.appending(path: "current.json"))
     }
-    let stateURLs = (try? manager.subpathsOfDirectory(atPath: root.path))?
-      .filter { URL(fileURLWithPath: $0).lastPathComponent == "meeting.json" }
-      .map { root.appending(path: $0) } ?? []
-    for stateURL in stateURLs {
+    for stateURL in allStateURLs() {
       guard let data = try? Data(contentsOf: stateURL),
         let document = try? decoder.decode(MeetingDocument.self, from: data),
         document.status == .complete
@@ -533,11 +777,7 @@ actor MeetingStore {
 
   func deleteMeeting(id: UUID) async throws {
     let manager = FileManager.default
-    guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
-      throw CocoaError(.fileNoSuchFile)
-    }
-    let target = enumerator.compactMap { $0 as? URL }
-      .filter { $0.lastPathComponent == "meeting.json" }
+    let target = allStateURLs()
       .compactMap { url -> (URL, MeetingDocument)? in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
@@ -557,8 +797,13 @@ actor MeetingStore {
       .flatMap { try? decoder.decode(CurrentMeetingPointer.self, from: $0) }
     let clearPointer = pointer?.meetingID == id && pointer?.active == false
 
-    try await sync.delete(folder: targetFolder, relativeTo: root, clearPointer: clearPointer)
-    try manager.removeItem(at: targetFolder)
+    try await sync.delete(
+      folder: targetFolder, relativeTo: baseRoot(of: targetFolder), clearPointer: clearPointer)
+    // For an archive-resident meeting the sync delete already removed this
+    // exact folder, so a second removal must tolerate its absence.
+    if manager.fileExists(atPath: targetFolder.path) {
+      try manager.removeItem(at: targetFolder)
+    }
     if clearPointer {
       try? manager.removeItem(at: pointerURL)
       try? manager.removeItem(at: root.appending(path: RemoteSyncService.pointerMarker))
@@ -577,11 +822,7 @@ actor MeetingStore {
         userInfo: [NSLocalizedDescriptionKey: "Meeting title cannot be empty"])
     }
     let manager = FileManager.default
-    guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
-      throw CocoaError(.fileNoSuchFile)
-    }
-    let target = enumerator.compactMap { $0 as? URL }
-      .filter { $0.lastPathComponent == "meeting.json" }
+    let target = allStateURLs()
       .compactMap { url -> (URL, MeetingDocument)? in
         guard let data = try? Data(contentsOf: url),
           var document = try? decoder.decode(MeetingDocument.self, from: data),
@@ -604,11 +845,12 @@ actor MeetingStore {
     try atomicWrite(
       Data(MarkdownRenderer.renderMeeting(document).utf8),
       to: targetFolder.appending(path: "meeting.md"))
-    try atomicWrite(encoder.encode(document), to: targetFolder.appending(path: "meeting.json"))
+    try atomicWrite(encoder.encode(document), to: stateURL(in: targetFolder))
     try Data(UUID().uuidString.utf8).write(
       to: targetFolder.appending(path: RemoteSyncService.folderMarker), options: .atomic)
 
-    let oldRelativePath = targetFolder.path.replacingOccurrences(of: root.path + "/", with: "")
+    let base = baseRoot(of: targetFolder)
+    let oldRelativePath = targetFolder.path.replacingOccurrences(of: base.path + "/", with: "")
     let safeTitle = cleanTitle.filenameSafe.isEmpty ? "meeting" : cleanTitle.filenameSafe
     let renamedFolder = targetFolder.deletingLastPathComponent().appending(
       path: "\(DateFormatter.fileTime.string(from: document.startedAt))-\(safeTitle)-\(document.id.uuidString.prefix(8))",
@@ -625,7 +867,7 @@ actor MeetingStore {
         to: renamedFolder.appending(path: RemoteSyncService.renameMarker), options: .atomic)
     }
     let finalFolder = folderChanged ? renamedFolder : targetFolder
-    let finalRelativePath = finalFolder.path.replacingOccurrences(of: root.path + "/", with: "")
+    let finalRelativePath = finalFolder.path.replacingOccurrences(of: base.path + "/", with: "")
 
     let pointerURL = root.appending(path: "current.json")
     if let data = try? Data(contentsOf: pointerURL),
@@ -655,13 +897,7 @@ actor MeetingStore {
   }
 
   private func latestFolder(where predicate: (MeetingDocument) -> Bool) -> URL? {
-    let manager = FileManager.default
-    guard
-      let enumerator = manager.enumerator(
-        at: root, includingPropertiesForKeys: [.contentModificationDateKey])
-    else { return nil }
-    return enumerator.compactMap { $0 as? URL }
-      .filter { $0.lastPathComponent == "meeting.json" }
+    return allStateURLs(keys: [.contentModificationDateKey])
       .compactMap { url -> (URL, Date)? in
         guard let data = try? Data(contentsOf: url),
           let document = try? decoder.decode(MeetingDocument.self, from: data),
@@ -684,7 +920,7 @@ actor MeetingStore {
     let liveURL = folder.appending(path: "live.md")
     let transcriptURL = folder.appending(path: "transcript.md")
     let meetingURL = folder.appending(path: "meeting.md")
-    let stateURL = folder.appending(path: "meeting.json")
+    let stateURL = stateURL(in: folder)
     if meeting.status == .complete {
       if meeting.transcriptDeletedAt == nil {
         try atomicWrite(Data(MarkdownRenderer.renderTranscript(meeting).utf8), to: transcriptURL)
@@ -711,7 +947,7 @@ actor MeetingStore {
 
   private func persistPointer(active: Bool, captureState: String?) throws {
     guard let meeting, let folder else { return }
-    let relative = folder.path.replacingOccurrences(of: root.path + "/", with: "")
+    let relative = folder.path.replacingOccurrences(of: baseRoot(of: folder).path + "/", with: "")
     let pointer = CurrentMeetingPointer(
       active: active, meetingID: meeting.id, title: meeting.title,
       relativeFolder: relative, startedAt: meeting.startedAt, updatedAt: Date(),

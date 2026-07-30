@@ -266,7 +266,10 @@ actor RemoteSyncService {
     if let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) {
       for case let marker as URL in enumerator where marker.lastPathComponent == Self.folderMarker {
         let folder = marker.deletingLastPathComponent()
-        let state = folder.appending(path: "meeting.json")
+        var state = folder.appending(path: MeetingStore.hiddenStateFileName)
+        if !manager.fileExists(atPath: state.path) {
+          state = folder.appending(path: MeetingStore.stateFileName)
+        }
         let complete =
           (try? Data(contentsOf: state))
           .flatMap { try? JSONDecoder.meetingDecoder.decode(MeetingDocument.self, from: $0) }?
@@ -509,12 +512,22 @@ actor RemoteSyncService {
   private func sync(folder: URL) async throws {
     let config = try validatedRemoteConfiguration()
     let tail = folder.pathComponents.suffix(4).joined(separator: "/")
-    let localTarget = try localArchiveURL(for: config).appending(
-      path: tail, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: localTarget, withIntermediateDirectories: true)
-    try await sync(folder: folder, destination: localTarget.path + "/", remotely: false)
-    if config.includeAudio {
-      try Self.makeRetainedAudioVisible(in: localTarget)
+    let archive = try localArchiveURL(for: config)
+    let folderPath = folder.standardizedFileURL.path
+    // A finished meeting now lives *in* the archive, so there is usually no
+    // local copy step at all. The copy leg only remains for a meeting still in
+    // the spool (archive volume was unavailable at finalization), and it must
+    // never run when source and destination are the same folder: rsync with
+    // --delete-excluded would delete the very audio it excludes.
+    if !folderPath.hasPrefix(archive.path + "/") {
+      let localTarget = archive.appending(path: tail, directoryHint: .isDirectory)
+      try FileManager.default.createDirectory(at: localTarget, withIntermediateDirectories: true)
+      try await sync(folder: folder, destination: localTarget.path + "/", remotely: false)
+      if config.includeAudio {
+        try Self.makeRetainedAudioVisible(in: localTarget)
+      }
+    } else if config.includeAudio {
+      try Self.makeRetainedAudioVisible(in: folder)
     }
 
     if config.remoteSyncEnabled {
@@ -534,6 +547,13 @@ actor RemoteSyncService {
     ]
     if !config.includeAudio { arguments += ["--exclude", "*.wav"] }
     if remotely { arguments += ["-e", strictSSHCommand] }
+    // The machine state stays off the remote host: nothing there reads it,
+    // and it duplicates the full transcript. The local archive keeps it
+    // (hidden) because it *is* the meeting's state under the new layout.
+    if remotely {
+      arguments += ["--exclude", MeetingStore.stateFileName]
+      arguments += ["--exclude", MeetingStore.hiddenStateFileName]
+    }
     arguments += ["--exclude", Self.folderMarker]
     arguments += ["--exclude", Self.renameMarker]
     arguments += [folder.path + "/", destination]

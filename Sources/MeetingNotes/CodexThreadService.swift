@@ -105,7 +105,7 @@ enum CodexThreadService {
     1. If `live.md` exists, read it through its current end. Re-read it whenever I ask what was just discussed.
     2. If `meeting.md` exists, use it as the primary semantic overview.
     3. Do not read the complete `transcript.md` unless I explicitly ask for transcript evidence, or `meeting.md` is absent or clearly incomplete.
-    4. Use `meeting.json` only when meeting metadata or processing state is needed.
+    4. Use the hidden `.meeting.json` only when meeting metadata or processing state is needed.
     5. Do not automatically extract decisions, tasks, commitments, or owners. Wait until I ask.
     6. Keep claims grounded in the meeting files and preserve timestamps when they matter.
 

@@ -141,7 +141,10 @@ final class AppModel {
     root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
       .appending(path: "MeetingNotes/Spool", directoryHint: .isDirectory)
     remoteSync = RemoteSyncService(configuration: archiveConfiguration)
-    store = MeetingStore(root: root, sync: remoteSync)
+    store = MeetingStore(
+      root: root,
+      archiveRoot: Self.archiveRootURL(for: archiveConfiguration.localPath),
+      sync: remoteSync)
     live = LiveTranscriptionEngine(transcriber: transcriber)
     final = FinalTranscriptionEngine(transcriber: transcriber)
     remoteSyncEnabled = archiveConfiguration.remoteSyncEnabled
@@ -317,9 +320,12 @@ final class AppModel {
 
   func loadInitialState() async {
     guard !isUITest else { return }
+    await store.promoteCompletedSpoolMeetings()
+    await store.normalizeArchivedMeetingFolders()
     await store.normalizeCompletedMeetingFolders()
     await store.normalizeMeetingDocuments()
     await remoteSync.reconcile(root: root)
+    await remoteSync.reconcile(root: Self.archiveRootURL(for: archiveConfiguration.localPath))
     await runTranscriptRetentionCleanup(reportStatus: false)
     startRetentionMaintenance()
     await refreshRecoverableMeetingAvailability()
@@ -333,11 +339,12 @@ final class AppModel {
 
   func repairCompletedMeeting(at targetFolder: URL) async throws {
     let spool = root.standardizedFileURL.path
+    let archive = Self.archiveRootURL(for: archiveConfiguration.localPath).path
     let target = targetFolder.standardizedFileURL
-    guard target.path.hasPrefix(spool + "/") else {
+    guard target.path.hasPrefix(spool + "/") || target.path.hasPrefix(archive + "/") else {
       throw NSError(
         domain: "MeetingNotes", code: 8,
-        userInfo: [NSLocalizedDescriptionKey: "The repair target is outside the private spool"])
+        userInfo: [NSLocalizedDescriptionKey: "The repair target is outside the meeting storage"])
     }
     let document = try await store.load(folder: target)
     let microphoneURL = target.appending(path: "microphone.wav")
@@ -369,11 +376,12 @@ final class AppModel {
 
   func regenerateMeetingInsights(at targetFolder: URL) async throws {
     let spool = root.standardizedFileURL.path
+    let archive = Self.archiveRootURL(for: archiveConfiguration.localPath).path
     let target = targetFolder.standardizedFileURL
-    guard target.path.hasPrefix(spool + "/") else {
+    guard target.path.hasPrefix(spool + "/") || target.path.hasPrefix(archive + "/") else {
       throw NSError(
         domain: "MeetingNotes", code: 10,
-        userInfo: [NSLocalizedDescriptionKey: "The insights target is outside the private spool"])
+        userInfo: [NSLocalizedDescriptionKey: "The insights target is outside the meeting storage"])
     }
     let meeting = try await store.load(folder: target)
     guard meeting.status == .complete, !meeting.transcript.isEmpty else {
@@ -730,13 +738,19 @@ final class AppModel {
       settingsStatusText = ""
       return
     }
+    let previousPath = ArchiveSettingsStore.load().localPath
     settingsStatusText = "Saving…"
     archiveSettingsSaveTask = Task {
       try? await Task.sleep(for: .milliseconds(500))
       guard !Task.isCancelled else { return }
       ArchiveSettingsStore.saveStorage(configuration)
       let savedConfiguration = ArchiveSettingsStore.load()
+      await store.updateArchiveRoot(Self.archiveRootURL(for: savedConfiguration.localPath))
       await remoteSync.update(configuration: savedConfiguration)
+      if Self.archiveRootURL(for: previousPath) != Self.archiveRootURL(for: savedConfiguration.localPath) {
+        await offerToRelocateArchivedMeetings(
+          from: previousPath, to: savedConfiguration.localPath)
+      }
       await store.enqueueCompleteArchive()
       await remoteSync.flush()
       guard !Task.isCancelled else { return }
@@ -746,6 +760,36 @@ final class AppModel {
         settingsStatusText = "Saved · \(savedConfiguration.destinationDescription)"
       }
     }
+  }
+
+  /// When the archive folder changes, existing finished meetings are in the
+  /// old location. Andre chose: ask, never move silently.
+  private func offerToRelocateArchivedMeetings(from oldPath: String, to newPath: String) async {
+    let oldRoot = Self.archiveRootURL(for: oldPath)
+    let newRoot = Self.archiveRootURL(for: newPath)
+    let manager = FileManager.default
+    guard manager.fileExists(atPath: oldRoot.path) else { return }
+    let count = await store.archivedMeetingCount(in: oldRoot)
+    guard count > 0 else { return }
+
+    let alert = NSAlert()
+    alert.messageText = "Move existing meetings?"
+    alert.informativeText = """
+      \(count) finished meeting\(count == 1 ? "" : "s") remain in \
+      \(oldRoot.path). Move them to the new archive folder so everything \
+      stays in one place?
+      """
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Move Meetings")
+    alert.addButton(withTitle: "Leave Them")
+    NSApp.activate(ignoringOtherApps: true)
+    guard alert.runModal() == .alertFirstButtonReturn else {
+      showTransientStatus("Existing meetings stay in \(oldRoot.lastPathComponent)")
+      return
+    }
+    let moved = await store.relocateArchivedMeetings(from: oldRoot, to: newRoot)
+    await refreshMeetingDay()
+    showTransientStatus("Moved \(moved) meeting\(moved == 1 ? "" : "s") to the new archive")
   }
 
   func schedulePostMeetingHookSettingsSave() {
@@ -866,15 +910,24 @@ final class AppModel {
     }
   }
 
-  /// Builds the Codex context for a meeting folder inside the private spool,
-  /// mapped onto the user-visible archive location.
+  /// Builds the Codex context for a meeting folder. A finished meeting lives
+  /// in the archive already; a spool folder (active or awaiting promotion) is
+  /// mapped onto its eventual archive location so the task always points at
+  /// the user-visible path.
   private func codexContext(document: MeetingDocument, folder: URL) -> CodexMeetingContext? {
     let projectPath = (archiveConfiguration.localPath as NSString).expandingTildeInPath
     let projectFolder = URL(fileURLWithPath: projectPath, isDirectory: true)
+    let archiveRoot = projectFolder.standardizedFileURL.path + "/"
     let spoolRoot = root.standardizedFileURL.path + "/"
-    let spoolFolder = folder.standardizedFileURL.path
-    guard spoolFolder.hasPrefix(spoolRoot) else { return nil }
-    let relativeMeetingPath = String(spoolFolder.dropFirst(spoolRoot.count))
+    let folderPath = folder.standardizedFileURL.path
+    let relativeMeetingPath: String
+    if folderPath.hasPrefix(archiveRoot) {
+      relativeMeetingPath = String(folderPath.dropFirst(archiveRoot.count))
+    } else if folderPath.hasPrefix(spoolRoot) {
+      relativeMeetingPath = String(folderPath.dropFirst(spoolRoot.count))
+    } else {
+      return nil
+    }
     let archivedMeetingFolder = projectFolder.appending(
       path: relativeMeetingPath, directoryHint: .isDirectory)
     return CodexMeetingContext(
@@ -956,6 +1009,15 @@ final class AppModel {
   }
 
   private static let codexProjectHintShownKey = "codexProjectHintShown"
+
+  /// The user-facing archive root for a configured local path. Finished
+  /// meetings live here; the spool keeps only active and recoverable captures.
+  nonisolated static func archiveRootURL(for localPath: String) -> URL {
+    URL(
+      fileURLWithPath: (localPath as NSString).expandingTildeInPath,
+      isDirectory: true
+    ).standardizedFileURL
+  }
 
   private func showCodexProjectHintIfNeeded(projectFolder: URL) {
     let defaults = UserDefaults.standard
