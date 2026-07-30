@@ -534,6 +534,33 @@ import Testing
   #expect(displayed.map(\.id) == [document.id])
 }
 
+@Test func archiveNormalizationDropsALeftoverVisibleStateFile() async throws {
+  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: base) }
+  let spool = base.appending(path: "spool")
+  let archive = base.appending(path: "archive")
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: spool, archiveRoot: archive, sync: sync)
+
+  let document = try await store.begin(title: "Twice stated", calendar: nil)
+  try await store.finalize(insights: nil)
+  let folder = try #require(await store.currentFolder())
+  let hidden = folder.appending(path: MeetingStore.hiddenStateFileName)
+  let visible = folder.appending(path: MeetingStore.stateFileName)
+  #expect(FileManager.default.fileExists(atPath: hidden.path))
+
+  // An interrupted older normalization can leave both names in one folder.
+  try FileManager.default.copyItem(at: hidden, to: visible)
+
+  await store.normalizeArchivedMeetingFolders()
+
+  // The hidden file is canonical; the duplicate visible copy is removed.
+  #expect(FileManager.default.fileExists(atPath: hidden.path))
+  #expect(!FileManager.default.fileExists(atPath: visible.path))
+  let displayed = await store.meetingsForDisplay(on: document.startedAt)
+  #expect(displayed.map(\.id) == [document.id])
+}
+
 @Test func audioCleanupRemovesOnlyFinishedMeetingAudio() async throws {
   let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: base) }
@@ -889,6 +916,43 @@ import Testing
     calendar: calendar)
 
   #expect(merged.map(\.id) == [pendingID, completedID])
+}
+
+@Test func meetingListMergeDeduplicatesRepeatedCompletedRows() {
+  let calendar = Calendar(identifier: .gregorian)
+  let day = Date(timeIntervalSince1970: 1_768_435_200)
+  let meetingID = UUID()
+  let completed = TodayMeetingSummary(
+    id: meetingID, title: "Once", startedAt: day.addingTimeInterval(3_600),
+    endedAt: day.addingTimeInterval(4_200), summary: "Done")
+  let duplicate = TodayMeetingSummary(
+    id: meetingID, title: "Twice", startedAt: completed.startedAt,
+    endedAt: completed.endedAt, summary: "Done")
+
+  // Defense in depth: even if the store hands the same meeting back twice,
+  // the UI shows one row.
+  let merged = AppModel.mergeMeetingSummaries(
+    completed: [completed, duplicate], pending: [], on: day, calendar: calendar)
+
+  #expect(merged.count == 1)
+  #expect(merged.first?.title == "Once")
+}
+
+@Test func relativePathsAreBuiltFromVerifiedPrefixes() {
+  let base = URL(fileURLWithPath: "/tmp/archive", isDirectory: true)
+  let inside = URL(fileURLWithPath: "/tmp/archive/2026/W31/2026-07-28/meeting", isDirectory: true)
+  #expect(MeetingStore.relativePath(of: inside, under: base) == "2026/W31/2026-07-28/meeting")
+
+  // A base path that repeats deeper inside the folder path must not be
+  // stripped twice, which is what replacingOccurrences used to risk.
+  let repeated = URL(
+    fileURLWithPath: "/tmp/archive/nested/tmp/archive/meeting", isDirectory: true)
+  #expect(
+    MeetingStore.relativePath(of: repeated, under: base) == "nested/tmp/archive/meeting")
+
+  // A folder outside the base cannot produce a bogus relative path.
+  let outside = URL(fileURLWithPath: "/tmp/elsewhere/meeting", isDirectory: true)
+  #expect(MeetingStore.relativePath(of: outside, under: base) == "meeting")
 }
 
 @Test func persistedMeetingCreatesDurableSyncMarkers() async throws {
@@ -1534,6 +1598,19 @@ import Testing
   #expect(headers[0] == Configuration.HTTPHookHeader(name: "Authorization", value: "Bearer abc123"))
   // Surrounding whitespace is trimmed from both sides of the colon.
   #expect(headers[1] == Configuration.HTTPHookHeader(name: "X-Source", value: "Meeting Notes"))
+
+  // Windows-style line endings leave a trailing \r on every line; it must
+  // not survive into the header value.
+  let crlfHeaders = Configuration.parseHookHeaders("X-One: alpha\r\nX-Two: beta\r")
+  #expect(crlfHeaders.count == 2)
+  #expect(crlfHeaders[0] == Configuration.HTTPHookHeader(name: "X-One", value: "alpha"))
+  #expect(crlfHeaders[1] == Configuration.HTTPHookHeader(name: "X-Two", value: "beta"))
+
+  // The seeded example token is a template, never a real credential; it is
+  // dropped so it cannot reach an endpoint unedited.
+  let seeded = Configuration.parseHookHeaders(Configuration.defaultHTTPHookHeaders)
+  #expect(!seeded.contains { $0.name == "Authorization" })
+  #expect(seeded.contains { $0.name == "X-Source" })
 
   // An empty URL means the hook is simply off, not misconfigured.
   #expect(Configuration.httpHookURLError("") == nil)

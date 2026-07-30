@@ -45,17 +45,25 @@ extension RemoteSyncService.Configuration {
   /// Parses `Name: value` lines. Blank lines and `#` comments are ignored so a
   /// user can annotate their header list.
   static func parseHookHeaders(_ raw: String) -> [HTTPHookHeader] {
-    raw.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
-      let trimmed = line.trimmingCharacters(in: .whitespaces)
+    // Swift treats "\r\n" as one Character, so splitting on "\n" alone would
+    // leave CRLF input as a single line; split on any newline instead.
+    raw.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline).compactMap { line in
+      let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmed.isEmpty, !trimmed.hasPrefix("#"),
         let separator = trimmed.firstIndex(of: ":")
       else { return nil }
       let name = trimmed[..<separator].trimmingCharacters(in: .whitespaces)
       let value = trimmed[trimmed.index(after: separator)...]
         .trimmingCharacters(in: .whitespaces)
-      guard !name.isEmpty, !value.isEmpty else { return nil }
+      guard !name.isEmpty, !value.isEmpty, !isExampleHeaderValue(value) else { return nil }
       return HTTPHookHeader(name: name, value: value)
     }
+  }
+
+  /// The seeded example token must never reach a real endpoint. It is only a
+  /// template showing the `Name: value` shape until the user edits it.
+  static func isExampleHeaderValue(_ value: String) -> Bool {
+    value.contains("sk-example-token")
   }
 
   /// Validates the destination of an HTTP hook without revealing header values.

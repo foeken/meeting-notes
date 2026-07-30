@@ -10,7 +10,7 @@ enum VocabularySettingsStore {
   private static let key = "recognition.customVocabulary"
   static let maximumEntries = 256
 
-  static func loadDraft(from defaults: UserDefaults = .standard) -> String {
+  private static func loadDraft(from defaults: UserDefaults = .standard) -> String {
     defaults.string(forKey: key) ?? ""
   }
 
@@ -18,25 +18,8 @@ enum VocabularySettingsStore {
     parse(loadDraft(from: defaults))
   }
 
-  static func save(_ draft: String, to defaults: UserDefaults = .standard) {
-    defaults.set(formatted(parse(draft)), forKey: key)
-  }
-
   static func save(_ entries: [VocabularyEntry], to defaults: UserDefaults = .standard) {
     defaults.set(formatted(entries), forKey: key)
-  }
-
-  static func validationError(for draft: String) -> String? {
-    let nonemptyLines = draft.components(separatedBy: .newlines)
-      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-      .filter { !$0.isEmpty }
-    if nonemptyLines.count > maximumEntries {
-      return "Use at most \(maximumEntries) words or phrases."
-    }
-    if parse(draft).contains(where: { $0.term.count < 3 }) {
-      return "Custom words must contain at least 3 characters."
-    }
-    return nil
   }
 
   static func parse(_ draft: String) -> [VocabularyEntry] {

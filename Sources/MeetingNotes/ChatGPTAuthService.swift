@@ -32,10 +32,11 @@ actor ChatGPTAuthService {
     guard let result = try? await run(executable, arguments: ["login", "status"]) else {
       return false
     }
-    // "Not logged in" also contains "logged in"; reject the negative phrasing first.
+    // The exit status is authoritative: `codex login status` exits non-zero
+    // when signed out. The phrase check stays only as a defensive fallback
+    // for builds that exit zero while reporting "Not logged in".
     return result.status == 0
       && !result.output.localizedCaseInsensitiveContains("not logged in")
-      && result.output.localizedCaseInsensitiveContains("logged in")
   }
 
   func signIn() async throws {
@@ -71,7 +72,11 @@ actor ChatGPTAuthService {
     let cleanModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
     if !cleanModel.isEmpty { arguments += ["--model", cleanModel] }
     let cleanEffort = reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !cleanEffort.isEmpty {
+    // The value lands inside a TOML string; only known effort-name characters
+    // may pass so quoting can never be broken from settings.
+    if !cleanEffort.isEmpty,
+      cleanEffort.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" })
+    {
       arguments += ["-c", "model_reasoning_effort=\"\(cleanEffort)\""]
     }
     arguments += [

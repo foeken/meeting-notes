@@ -127,7 +127,6 @@ final class AppModel {
   private let isMaintenance = ProcessInfo.processInfo.arguments.contains("--repair-meeting")
     || ProcessInfo.processInfo.arguments.contains("--regenerate-insights")
   private var timer: Timer?
-  private var startedAt: Date?
   private var lastHeartbeatElapsed: TimeInterval = 0
   private var pausedBySleep = false
   private var liveFeedTask: Task<Void, Never>?
@@ -135,6 +134,10 @@ final class AppModel {
     AsyncStream<(samples: [Int16], source: TranscriptTurn.Source, wavPosition: Int)>.Continuation?
   private var workspaceObservers: [NSObjectProtocol] = []
   private var calendarMetadata: CalendarMetadata?
+  /// The calendar event backing the meeting that just stopped. Background
+  /// suggestion refreshes skip it so the ended meeting is not immediately
+  /// re-suggested as the next title.
+  private var stoppedMeetingExclusion: CalendarService.Exclusion?
   private var retentionMaintenanceTask: Task<Void, Never>?
   private var deferredNotesMaintenanceTask: Task<Void, Never>?
   /// Guards `runDeferredNotesMaintenance` against overlapping runs without
@@ -181,7 +184,11 @@ final class AppModel {
     tanaWorkspaceID = tanaSettings.workspaceID ?? ""
     tanaWorkspaceName = tanaSettings.workspaceName ?? ""
     tanaSelectedSupertagIDs = tanaSettings.selectedSupertagIDs
-    Task { [transcriber] in try? await transcriber.prepare() }
+    // Deterministic UI test launches must not kick off the transcription
+    // model download; real launches and --repair-meeting keep the preload.
+    if !isUITest {
+      Task { [transcriber] in try? await transcriber.prepare() }
+    }
     let notifications = NSWorkspace.shared.notificationCenter
     workspaceObservers.append(
       notifications.addObserver(
@@ -239,10 +246,13 @@ final class AppModel {
       codexPromptStatusText = "The prompt cannot be empty."
       return
     }
+    // Restoring the default rewrites the draft, which re-triggers this via
+    // onChange; an unchanged draft must not clear the "restored" status.
+    guard codexPromptDraft != CodexPromptSettingsStore.load() else { return }
     CodexPromptSettingsStore.save(codexPromptDraft)
-    if codexPromptStatusText == "The prompt cannot be empty." {
-      codexPromptStatusText = ""
-    }
+    // A real edit clears any stale status, including "Default prompt
+    // restored." from an earlier reset.
+    codexPromptStatusText = ""
   }
 
   func restoreDefaultCodexPrompt() {
@@ -255,10 +265,13 @@ final class AppModel {
       summaryGuidanceStatusText = "The instructions cannot be empty."
       return
     }
+    // Restoring the default rewrites the draft, which re-triggers this via
+    // onChange; an unchanged draft must not clear the "restored" status.
+    guard summaryGuidanceDraft != SummarySettingsStore.loadGuidance() else { return }
     SummarySettingsStore.saveGuidance(summaryGuidanceDraft)
-    if summaryGuidanceStatusText == "The instructions cannot be empty." {
-      summaryGuidanceStatusText = ""
-    }
+    // A real edit clears any stale status, including "Default
+    // instructions restored." from an earlier reset.
+    summaryGuidanceStatusText = ""
   }
 
   func restoreDefaultSummaryGuidance() {
@@ -385,7 +398,9 @@ final class AppModel {
   }
 
   func recordDetectedMeeting() {
-    guard state == .idle else { return }
+    // The Record button accepts .idle and .failed; the notification action
+    // must not be stricter than the button it mirrors.
+    guard canManageMeetings else { return }
     let app = detectedMeetingApp
     if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       let app
@@ -613,7 +628,12 @@ final class AppModel {
     }
     do {
       try await loadTanaWorkspacesAndTags()
-      tanaStatusText = "Connected to Tana"
+      if await TanaAPIClient.shared.lastEnrichmentTruncated {
+        tanaStatusText =
+          "Connected to Tana · the last enrichment could not load every entity, so a partial list was used"
+      } else {
+        tanaStatusText = "Connected to Tana"
+      }
     } catch {
       tanaStatusText = error.localizedDescription
     }
@@ -727,7 +747,11 @@ final class AppModel {
     let visiblePending = pending.filter {
       !completedIDs.contains($0.id) && calendar.isDate($0.startedAt, inSameDayAs: date)
     }
-    return (completed + visiblePending).sorted { $0.startedAt > $1.startedAt }
+    // Defense in depth: should the store ever hand back the same meeting
+    // twice (for example via overlapping roots), the UI still shows one row.
+    var seen = Set<UUID>()
+    let unique = (completed + visiblePending).filter { seen.insert($0.id).inserted }
+    return unique.sorted { $0.startedAt > $1.startedAt }
   }
 
   /// Shows the just-stopped meeting in today's list immediately, before
@@ -777,6 +801,15 @@ final class AppModel {
   }
 
   var canManageMeetings: Bool { state == .idle || isFailed }
+
+  /// Read-only meeting actions (open files, discuss) stay available while a
+  /// capture is being processed; only active recording keeps them blocked.
+  var canReadMeetings: Bool {
+    switch state {
+    case .idle, .processing, .failed: true
+    case .starting, .recording, .paused: false
+    }
+  }
 
   var canTestPostMeetingHook: Bool {
     canSaveArchiveSettings
@@ -1012,7 +1045,7 @@ final class AppModel {
   }
 
   func discussMeetingInCodex(_ meeting: TodayMeetingSummary, startNewTask: Bool = false) {
-    guard state == .idle, codexLaunchingMeetingID == nil else { return }
+    guard canReadMeetings, codexLaunchingMeetingID == nil else { return }
     codexLaunchingMeetingID = meeting.id
     Task {
       defer { codexLaunchingMeetingID = nil }
@@ -1598,7 +1631,9 @@ final class AppModel {
   }
 
   func loadCalendarSuggestion() async {
-    guard state == .idle, let suggestion = await calendar.currentMeeting() else { return }
+    guard state == .idle,
+      let suggestion = await calendar.currentMeeting(excluding: stoppedMeetingExclusion)
+    else { return }
     title = suggestion.title
     calendarMetadata = suggestion.metadata
   }
@@ -1704,7 +1739,6 @@ final class AppModel {
         captureClock.reset()
         throw error
       }
-      startedAt = Date()
       elapsed = 0
       startTimer()
       recordingWakeLock.acquire()
@@ -1758,7 +1792,6 @@ final class AppModel {
         microphone.pause()
         throw error
       }
-      startedAt = Date().addingTimeInterval(-elapsed)
       pausedBySleep = false
       startTimer()
       recordingWakeLock.acquire()
@@ -1852,9 +1885,12 @@ final class AppModel {
       // the next meeting begin while this one is transcribed in the background.
       state = .idle
       captureClock.reset()
-      startedAt = nil
       elapsed = 0
       recentTurns = []
+      stoppedMeetingExclusion = CalendarService.Exclusion(
+        eventIdentifier: calendarMetadata?.eventIdentifier,
+        title: stoppedMeeting.document.title
+      )
       title = ""
       calendarMetadata = nil
       await loadCalendarSuggestion()

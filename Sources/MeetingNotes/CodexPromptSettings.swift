@@ -35,11 +35,6 @@ enum CodexPromptSettingsStore {
     defaults.set(template, forKey: summaryMessageKey)
   }
 
-  static func restoreDefaultSummaryMessage(to defaults: UserDefaults = .standard) -> String {
-    defaults.removeObject(forKey: summaryMessageKey)
-    return CodexThreadService.defaultSummaryMessageTemplate
-  }
-
   static func summaryMessageEnabled(from defaults: UserDefaults = .standard) -> Bool {
     defaults.object(forKey: summaryMessageEnabledKey) as? Bool ?? false
   }

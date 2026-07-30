@@ -160,7 +160,9 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case .microphone: "mic"
     case .tana: "point.3.connected.trianglepath.dotted"
     case .dictionary: "character.book.closed"
-    case .codex: "terminal"
+    // The Codex pane renders `OpenAISidebarLabel` with the OpenAI mark, so
+    // this SF Symbol name is never displayed.
+    case .codex: "questionmark"
     case .summaries: "doc.text"
     }
   }

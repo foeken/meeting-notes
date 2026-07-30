@@ -360,7 +360,7 @@ struct MenuBarView: View {
               }
               .buttonStyle(.plain)
               .disabled(
-                !model.canManageMeetings || model.codexLaunchingMeetingID != nil
+                !model.canReadMeetings || model.codexLaunchingMeetingID != nil
                   || model.isMeetingFinalizing(meeting) || model.isMeetingRecoverable(meeting)
               )
               .help(
@@ -377,24 +377,28 @@ struct MenuBarView: View {
                   } label: {
                     Label("Delete meeting…", systemImage: "trash")
                   }
+                  .disabled(!model.canManageMeetings)
                 } else if model.isMeetingRecoverable(meeting) {
                   Button {
                     model.recoverMeeting(meeting)
                   } label: {
                     Label("Retry finalization", systemImage: "arrow.counterclockwise")
                   }
+                  .disabled(!model.canManageMeetings)
                   Divider()
                   Button(role: .destructive) {
                     model.requestMeetingDeletion(meeting)
                   } label: {
                     Label("Delete meeting…", systemImage: "trash")
                   }
+                  .disabled(!model.canManageMeetings)
                 } else {
                   Button {
                     model.requestMeetingRename(meeting)
                   } label: {
                     Label("Rename…", systemImage: "pencil")
                   }
+                  .disabled(!model.canManageMeetings)
                   Divider()
                   if meeting.summary != nil {
                     Button {
@@ -416,12 +420,14 @@ struct MenuBarView: View {
                       meeting.summary == nil ? "Create summary" : "Recreate summary",
                       systemImage: meeting.summary == nil ? "sparkles" : "arrow.clockwise")
                   }
+                  .disabled(!model.canManageMeetings)
                   Divider()
                   Button(role: .destructive) {
                     model.requestMeetingDeletion(meeting)
                   } label: {
                     Label("Delete meeting…", systemImage: "trash")
                   }
+                  .disabled(!model.canManageMeetings)
                 }
               } label: {
                 Image(systemName: "ellipsis")
@@ -433,7 +439,10 @@ struct MenuBarView: View {
               .menuIndicator(.hidden)
               .menuStyle(.borderlessButton)
               .fixedSize()
-              .disabled(!model.canManageMeetings)
+              // Read-only actions (open files, discuss) stay reachable while
+              // a stopped capture is processed; mutating items above disable
+              // themselves individually.
+              .disabled(!model.canReadMeetings)
               .accessibilityLabel("More actions")
             }
             .padding(.horizontal, 11)

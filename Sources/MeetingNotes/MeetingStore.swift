@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// How much disk the meeting storage uses, split the way users think about
 /// it: documents worth keeping, and audio that can be cleaned up.
@@ -11,6 +12,8 @@ struct MeetingStorageUsage: Equatable, Sendable {
 }
 
 actor MeetingStore {
+  static let logger = Logger(subsystem: "app.meetingnotes.menu", category: "MeetingStore")
+
   struct StoppedMeeting: Sendable {
     let document: MeetingDocument
     let folder: URL
@@ -77,6 +80,16 @@ actor MeetingStore {
 
   private func baseRoot(of folder: URL) -> URL {
     isArchiveFolder(folder) ? archiveRoot : root
+  }
+
+  /// The path of `folder` relative to `base`, built from a verified prefix so
+  /// a base path that happens to repeat inside the folder path can never
+  /// corrupt the result. A folder outside `base` falls back to its own name.
+  static func relativePath(of folder: URL, under base: URL) -> String {
+    let folderPath = folder.standardizedFileURL.path
+    let basePrefix = base.standardizedFileURL.path + "/"
+    guard folderPath.hasPrefix(basePrefix) else { return folder.lastPathComponent }
+    return String(folderPath.dropFirst(basePrefix.count))
   }
 
   /// Every meeting state file across both roots: the spool for live and
@@ -340,7 +353,24 @@ actor MeetingStore {
         if url.lastPathComponent == Self.stateFileName {
           let hidden = archiveFolder.appending(path: Self.hiddenStateFileName)
           if !manager.fileExists(atPath: hidden.path) {
-            try? manager.moveItem(at: url, to: hidden)
+            do {
+              try manager.moveItem(at: url, to: hidden)
+            } catch {
+              Self.logger.error(
+                "Could not hide state file in \(archiveFolder.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+          } else if let hiddenData = try? Data(contentsOf: hidden),
+            let hiddenDocument = try? decoder.decode(MeetingDocument.self, from: hiddenData),
+            hiddenDocument.id == document.id
+          {
+            // Both state files exist for the same meeting; the hidden one is
+            // canonical, so the leftover visible copy is dropped.
+            do {
+              try manager.removeItem(at: url)
+            } catch {
+              Self.logger.error(
+                "Could not remove duplicate state file in \(archiveFolder.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
           }
         }
       } else if spoolIDs[document.id] != nil {
@@ -1127,7 +1157,7 @@ actor MeetingStore {
       to: targetFolder.appending(path: RemoteSyncService.folderMarker), options: .atomic)
 
     let base = baseRoot(of: targetFolder)
-    let oldRelativePath = targetFolder.path.replacingOccurrences(of: base.path + "/", with: "")
+    let oldRelativePath = Self.relativePath(of: targetFolder, under: base)
     let safeTitle = cleanTitle.filenameSafe.isEmpty ? "meeting" : cleanTitle.filenameSafe
     let renamedFolder = targetFolder.deletingLastPathComponent().appending(
       path: "\(DateFormatter.fileTime.string(from: document.startedAt))-\(safeTitle)-\(document.id.uuidString.prefix(8))",
@@ -1144,7 +1174,7 @@ actor MeetingStore {
         to: renamedFolder.appending(path: RemoteSyncService.renameMarker), options: .atomic)
     }
     let finalFolder = folderChanged ? renamedFolder : targetFolder
-    let finalRelativePath = finalFolder.path.replacingOccurrences(of: base.path + "/", with: "")
+    let finalRelativePath = Self.relativePath(of: finalFolder, under: base)
 
     let pointerURL = root.appending(path: "current.json")
     if let data = try? Data(contentsOf: pointerURL),
@@ -1224,7 +1254,7 @@ actor MeetingStore {
 
   private func persistPointer(active: Bool, captureState: String?) throws {
     guard let meeting, let folder else { return }
-    let relative = folder.path.replacingOccurrences(of: baseRoot(of: folder).path + "/", with: "")
+    let relative = Self.relativePath(of: folder, under: baseRoot(of: folder))
     let pointer = CurrentMeetingPointer(
       active: active, meetingID: meeting.id, title: meeting.title,
       relativeFolder: relative, startedAt: meeting.startedAt, updatedAt: Date(),
@@ -1260,12 +1290,6 @@ actor MeetingStore {
 }
 
 extension DateFormatter {
-  fileprivate static let folderDay: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateFormat = "yyyy/MM/dd"
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    return formatter
-  }()
   fileprivate static let fileTime: DateFormatter = {
     let formatter = DateFormatter()
     formatter.dateFormat = "HHmm"

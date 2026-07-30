@@ -10,6 +10,13 @@ final class CalendarService {
     let metadata: CalendarMetadata
   }
 
+  /// Identifies the event backing a meeting that just stopped, so background
+  /// refreshes do not immediately re-suggest it.
+  struct Exclusion: Sendable, Equatable {
+    let eventIdentifier: String?
+    let title: String
+  }
+
   /// Explicitly requests calendar access. Call from a user-initiated UI path
   /// (for example a Settings button or first-run flow), never implicitly.
   @discardableResult
@@ -25,7 +32,7 @@ final class CalendarService {
     }
   }
 
-  func currentMeeting() async -> Suggestion? {
+  func currentMeeting(excluding exclusion: Exclusion? = nil) async -> Suggestion? {
     // This read path runs from background refreshes; it must never trigger the
     // system permission prompt. The UI calls requestAccess() explicitly.
     guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return nil }
@@ -37,6 +44,7 @@ final class CalendarService {
     let candidates = store.events(matching: predicate)
       .filter { !$0.isAllDay && $0.endDate >= now.addingTimeInterval(-5 * 60) }
       .filter { !Self.shouldIgnore(title: $0.title, ignoredWords: IgnoredMeetingTitlesStore.load()) }
+      .filter { !Self.isExcluded($0, by: exclusion) }
       .sorted {
         abs($0.startDate.timeIntervalSince(now)) < abs($1.startDate.timeIntervalSince(now))
       }
@@ -53,6 +61,17 @@ final class CalendarService {
       meetingURL: event.url
     )
     return Suggestion(title: event.title ?? "Meeting", metadata: metadata)
+  }
+
+  /// The event that backed a just-stopped meeting must not resurface as the
+  /// next suggestion. Match on the identifier when one was captured; fall
+  /// back to the title for meetings that never had calendar metadata.
+  nonisolated private static func isExcluded(_ event: EKEvent, by exclusion: Exclusion?) -> Bool {
+    guard let exclusion else { return false }
+    if let identifier = exclusion.eventIdentifier {
+      return event.eventIdentifier == identifier
+    }
+    return event.title == exclusion.title
   }
 
   nonisolated static func shouldIgnore(
