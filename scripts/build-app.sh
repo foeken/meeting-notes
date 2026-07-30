@@ -48,7 +48,24 @@ else
     [[ -e "$target" ]] || continue
     codesign --force --options runtime --timestamp --sign "$IDENTITY" "$target"
   done
+  # Pin the designated requirement to the bundle id and *team* rather than the
+  # default, which embeds the certificate's leaf common name. Development and
+  # release builds are signed with different certificates from the same team,
+  # so the default requirement flips between them and macOS treats every
+  # switch as a brand-new app, throwing away all granted permissions (TCC).
+  # Keying on the team keeps one privacy identity across both certificates.
+  TEAM_ID=$(
+    security find-certificate -c "$IDENTITY" -p \
+      | openssl x509 -noout -subject -nameopt multiline \
+      | awk '/organizationalUnitName/ { print $3; exit }'
+  )
+  if [[ ! "$TEAM_ID" =~ '^[A-Z0-9]{10}$' ]]; then
+    echo "error: could not determine the team id for identity: $IDENTITY" >&2
+    exit 6
+  fi
   codesign --force --options runtime --timestamp \
-    --entitlements "$ROOT/Resources/Entitlements.plist" --sign "$IDENTITY" "$APP"
+    --entitlements "$ROOT/Resources/Entitlements.plist" --sign "$IDENTITY" \
+    --requirements "=designated => identifier \"app.meetingnotes.menu\" and anchor apple generic and certificate leaf[subject.OU] = \"$TEAM_ID\"" \
+    "$APP"
 fi
 echo "$APP"
