@@ -558,9 +558,19 @@ actor RemoteSyncService {
     // never run when source and destination are the same folder: rsync with
     // --delete-excluded would delete the very audio it excludes.
     if !folderPath.hasPrefix(archive.path + "/") {
+      // The local mirror of a meeting still in the spool must never contain
+      // its state file unless the meeting is finished: a mirrored
+      // meeting.json makes the same meeting appear twice in the UI. Live
+      // documents (live.md) still mirror so current-meeting questions keep
+      // working during recording.
+      let document = (try? Data(contentsOf: folder.appending(path: MeetingStore.stateFileName)))
+        .flatMap { try? JSONDecoder.meetingDecoder.decode(MeetingDocument.self, from: $0) }
+      let isComplete = document?.status == .complete
       let localTarget = archive.appending(path: tail, directoryHint: .isDirectory)
       try FileManager.default.createDirectory(at: localTarget, withIntermediateDirectories: true)
-      try await sync(folder: folder, destination: localTarget.path + "/", remotely: false)
+      try await sync(
+        folder: folder, destination: localTarget.path + "/", remotely: false,
+        excludeState: !isComplete)
       if config.includeAudio {
         try Self.makeRetainedAudioVisible(in: localTarget)
       }
@@ -574,11 +584,14 @@ actor RemoteSyncService {
         "/usr/bin/ssh",
         strictSSHArguments(host: config.host) + ["mkdir", "-p", remoteFolder])
       try await sync(
-        folder: folder, destination: "\(config.host):\(remoteFolder)", remotely: true)
+        folder: folder, destination: "\(config.host):\(remoteFolder)", remotely: true,
+        excludeState: false)
     }
   }
 
-  private func sync(folder: URL, destination: String, remotely: Bool) async throws {
+  private func sync(
+    folder: URL, destination: String, remotely: Bool, excludeState: Bool = false
+  ) async throws {
     let config = configuration
     var arguments = [
       "-az", "--partial", "--delete-delay", "--delete-excluded", "--exclude", "*.tmp",
@@ -588,7 +601,9 @@ actor RemoteSyncService {
     // The machine state stays off the remote host: nothing there reads it,
     // and it duplicates the full transcript. The local archive keeps it
     // (hidden) because it *is* the meeting's state under the new layout.
-    if remotely {
+    // A local mirror of an *unfinished* spool capture also excludes it, so
+    // the same meeting never appears twice in the UI.
+    if remotely || excludeState {
       arguments += ["--exclude", MeetingStore.stateFileName]
       arguments += ["--exclude", MeetingStore.hiddenStateFileName]
     }

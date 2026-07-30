@@ -223,7 +223,16 @@ actor MeetingStore {
       + "/" + spoolFolder.lastPathComponent
     let destination = archiveRoot.appending(path: relative, directoryHint: .isDirectory)
     do {
-      guard !manager.fileExists(atPath: destination.path) else { return spoolFolder }
+      if manager.fileExists(atPath: destination.path) {
+        // The old sync mirrored in-progress captures into the archive. Such a
+        // mirror of the *same* meeting is stale by definition — the spool
+        // folder being promoted is the freshly finalized one — so it gives
+        // way. A folder holding a different meeting is never touched.
+        let mirrored = (try? Data(contentsOf: stateURL(in: destination)))
+          .flatMap { try? decoder.decode(MeetingDocument.self, from: $0) }
+        guard mirrored?.id == document.id else { return spoolFolder }
+        try manager.removeItem(at: destination)
+      }
       try manager.createDirectory(
         at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
       // Hide the state file before the move so the archive never shows a
@@ -691,6 +700,7 @@ actor MeetingStore {
   }
 
   func completedMeetings(on date: Date, calendar: Calendar = .current) -> [MeetingDocument] {
+    var seen = Set<UUID>()
     return allStateURLs()
       .compactMap { url -> MeetingDocument? in
         guard let data = try? Data(contentsOf: url),
@@ -700,12 +710,14 @@ actor MeetingStore {
         else { return nil }
         return document
       }
+      .filter { seen.insert($0.id).inserted }
       .sorted { $0.startedAt > $1.startedAt }
   }
 
   /// Includes completed meetings plus durable captures that can still be
   /// finalized. This keeps interrupted work visible after an app restart.
   func meetingsForDisplay(on date: Date, calendar: Calendar = .current) -> [MeetingDocument] {
+    var seen = Set<UUID>()
     return allStateURLs()
       .compactMap { url -> MeetingDocument? in
         guard let data = try? Data(contentsOf: url),
@@ -715,6 +727,7 @@ actor MeetingStore {
         if document.status == .complete { return document }
         return Self.hasRetainedAudio(in: url.deletingLastPathComponent()) ? document : nil
       }
+      .filter { seen.insert($0.id).inserted }
       .sorted { $0.startedAt > $1.startedAt }
   }
 

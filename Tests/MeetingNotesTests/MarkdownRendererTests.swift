@@ -498,6 +498,42 @@ import Testing
       .hasPrefix(archive.resolvingSymlinksInPath().path))
 }
 
+@Test func finalizationReplacesAStaleArchiveMirrorOfTheSameMeeting() async throws {
+  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: base) }
+  let spool = base.appending(path: "spool")
+  let archive = base.appending(path: "archive")
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: spool, archiveRoot: archive, sync: sync)
+
+  let document = try await store.begin(title: "Mirrored early", calendar: nil)
+  let spoolFolder = try #require(await store.currentFolder())
+
+  // Simulate the old sync mirroring the in-progress capture into the archive
+  // before finalization: same meeting ID, not complete.
+  let relative = spoolFolder.pathComponents.suffix(4).joined(separator: "/")
+  let mirrorFolder = archive.appending(path: relative)
+  try FileManager.default.createDirectory(at: mirrorFolder, withIntermediateDirectories: true)
+  try FileManager.default.copyItem(
+    at: spoolFolder.appending(path: "meeting.json"),
+    to: mirrorFolder.appending(path: "meeting.json"))
+
+  try await store.finalize(insights: nil)
+
+  // The finished meeting replaced the stale mirror: exactly one copy, in the
+  // archive, complete, with a hidden state file.
+  #expect(!FileManager.default.fileExists(atPath: spoolFolder.path))
+  let result = try await store.completedMeeting(id: document.id)
+  #expect(
+    result.folder.resolvingSymlinksInPath().path
+      .hasPrefix(archive.resolvingSymlinksInPath().path))
+  #expect(
+    FileManager.default.fileExists(
+      atPath: result.folder.appending(path: ".meeting.json").path))
+  let displayed = await store.meetingsForDisplay(on: document.startedAt)
+  #expect(displayed.map(\.id) == [document.id])
+}
+
 @Test func audioCleanupRemovesOnlyFinishedMeetingAudio() async throws {
   let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: base) }
@@ -1788,7 +1824,9 @@ import Testing
   let relative = folder.pathComponents.suffix(4).joined(separator: "/")
   let archived = archive.appending(path: relative)
   #expect(FileManager.default.fileExists(atPath: archived.appending(path: "live.md").path))
-  #expect(FileManager.default.fileExists(atPath: archived.appending(path: "meeting.json").path))
+  // The state file must not mirror while the capture is unfinished: a
+  // mirrored meeting.json would make the same meeting appear twice in the UI.
+  #expect(!FileManager.default.fileExists(atPath: archived.appending(path: "meeting.json").path))
   #expect(!FileManager.default.fileExists(atPath: archived.appending(path: "microphone.wav").path))
   #expect(FileManager.default.fileExists(atPath: archive.appending(path: "current.json").path))
 }
