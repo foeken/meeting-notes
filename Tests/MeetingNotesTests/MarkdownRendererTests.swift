@@ -567,14 +567,24 @@ import Testing
   #expect(manager.fileExists(atPath: migrated.appending(path: "meeting.md").path))
   #expect(!manager.fileExists(atPath: legacyFolder.path))
 
-  // The pre-migration backup holds the archive exactly as it was.
+  // The pre-migration backup is a single zip holding the archive as it was.
   let backupContents = try manager.contentsOfDirectory(
     at: backups, includingPropertiesForKeys: nil)
   #expect(backupContents.count == 1)
-  let backupName = try #require(backupContents.first?.lastPathComponent)
-  #expect(backupName.hasPrefix("Meeting Notes Backup "))
-  let backedUpFolder = try #require(backupContents.first)
-    .appending(path: "2026/07/28/1030-old-meeting-AAAA1111")
+  let backupZip = try #require(backupContents.first)
+  #expect(backupZip.lastPathComponent.hasPrefix("Meeting Notes Backup "))
+  #expect(backupZip.pathExtension == "zip")
+
+  // The zip really contains the pre-migration day-layout tree.
+  let unpacked = base.appending(path: "unpacked")
+  let unzip = Process()
+  unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+  unzip.arguments = ["-x", "-k", backupZip.path, unpacked.path]
+  try unzip.run()
+  unzip.waitUntilExit()
+  #expect(unzip.terminationStatus == 0)
+  let backedUpFolder = unpacked.appending(
+    path: "archive/2026/07/28/1030-old-meeting-AAAA1111")
   #expect(manager.fileExists(atPath: backedUpFolder.appending(path: "meeting.md").path))
 
   // A second run finds nothing to migrate and adds no second backup.

@@ -801,11 +801,11 @@ actor MeetingStore {
   }
 
   /// Keeps `current.json` pointing at the meeting after its folder moved.
-  /// Copies the archive to `<backup folder>/Meeting Notes Backup <date>`
-  /// before a layout migration touches it. Copy-only, best-effort, and
-  /// skipped when nothing needs migrating or today's backup already exists:
-  /// a failed backup must not block the migration, but a user must always be
-  /// able to find a pre-migration copy.
+  /// Zips the archive to `<backup folder>/Meeting Notes Backup <date>.zip`
+  /// before a layout migration touches it. Read-only with respect to the
+  /// archive, best-effort, and skipped when nothing needs migrating or
+  /// today's backup already exists: a failed backup must not block the
+  /// migration, but a user must always be able to find a pre-migration copy.
   private func backUpArchiveBeforeMigrationIfNeeded() {
     guard let migrationBackupFolder else { return }
     let manager = FileManager.default
@@ -821,11 +821,22 @@ actor MeetingStore {
     formatter.dateFormat = "yyyy-MM-dd"
     formatter.locale = Locale(identifier: "en_US_POSIX")
     let backup = migrationBackupFolder.appending(
-      path: "Meeting Notes Backup \(formatter.string(from: Date()))",
-      directoryHint: .isDirectory)
+      path: "Meeting Notes Backup \(formatter.string(from: Date())).zip")
     guard !manager.fileExists(atPath: backup.path) else { return }
     try? manager.createDirectory(at: migrationBackupFolder, withIntermediateDirectories: true)
-    try? manager.copyItem(at: archiveRoot, to: backup)
+
+    // ditto preserves resource forks and produces a Finder-openable zip.
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+    process.arguments = ["-c", "-k", "--keepParent", archiveRoot.path, backup.path]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    try? process.run()
+    process.waitUntilExit()
+    // A half-written zip is worse than none: it looks like a backup.
+    if process.terminationStatus != 0 {
+      try? manager.removeItem(at: backup)
+    }
   }
 
   private func updatePointerPathAfterMigration() {
