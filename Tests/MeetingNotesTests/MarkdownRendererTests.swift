@@ -1107,6 +1107,57 @@ import Testing
   #expect(await store.current()?.title == "Recovered title")
 }
 
+@Test func startupNormalizationPreservesCalendarParticipants() async throws {
+  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: root, sync: sync)
+  let calendar = CalendarMetadata(
+    eventIdentifier: "event-1", calendarTitle: "Work",
+    scheduledStart: Date(), scheduledEnd: Date().addingTimeInterval(1_800),
+    organizer: MeetingParticipant(name: "André Foeken"),
+    participants: [MeetingParticipant(name: "André Foeken"), MeetingParticipant(name: "Sandra")])
+  _ = try await store.begin(title: "Original title", calendar: calendar)
+  try await store.replaceTranscript([], status: .complete)
+  let originalFolder = try #require(await store.currentFolder())
+  let stateURL = originalFolder.appending(path: "meeting.json")
+  let decoder = JSONDecoder()
+  decoder.dateDecodingStrategy = .iso8601
+  var document = try decoder.decode(MeetingDocument.self, from: Data(contentsOf: stateURL))
+  document.title = "Recovered title"
+  let encoder = JSONEncoder()
+  encoder.dateEncodingStrategy = .iso8601
+  try encoder.encode(document).write(to: stateURL, options: .atomic)
+
+  await store.normalizeCompletedMeetingFolders()
+
+  // Startup repair is not a user rename: the calendar metadata must survive.
+  let repaired = try #require(await store.current())
+  #expect(repaired.title == "Recovered title")
+  #expect(repaired.calendar?.participants.count == 2)
+  #expect(repaired.calendar?.organizer?.name == "André Foeken")
+}
+
+@Test func startupNormalizationAcceptsAnyTimePrefixForAMatchingFolder() async throws {
+  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
+  let store = MeetingStore(root: root, sync: sync)
+  _ = try await store.begin(title: "Stable title", calendar: nil)
+  try await store.replaceTranscript([], status: .complete)
+  let folder = try #require(await store.currentFolder())
+
+  // A meeting recorded in another timezone renders a different HHmm prefix.
+  // Normalization must not churn the folder over the prefix alone.
+  let shifted = folder.deletingLastPathComponent()
+    .appending(path: "0001" + folder.lastPathComponent.dropFirst(4))
+  try FileManager.default.moveItem(at: folder, to: shifted)
+
+  await store.normalizeCompletedMeetingFolders()
+
+  #expect(FileManager.default.fileExists(atPath: shifted.path))
+}
+
 @Test func completedMeetingNotesCanBeRecreatedFromStoredState() async throws {
   let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
@@ -1137,18 +1188,19 @@ import Testing
   let suite = "MeetingNotesVocabularyTests-\(UUID().uuidString)"
   let defaults = try #require(UserDefaults(suiteName: suite))
   defer { defaults.removePersistentDomain(forName: suite) }
-  VocabularySettingsStore.save(VocabularySettingsStore.formatted(entries), to: defaults)
+  VocabularySettingsStore.save(entries, to: defaults)
   #expect(VocabularySettingsStore.load(from: defaults) == entries)
 }
 
 @Test func vocabularyCorrectorHandlesPunctuatedAliasesAndCacheInvalidation() {
-  let previous = VocabularySettingsStore.loadDraft()
+  let previous = VocabularySettingsStore.load()
   defer {
     VocabularySettingsStore.save(previous)
     VocabularyTextCorrector.invalidate()
   }
 
-  VocabularySettingsStore.save("Acme | ack me\n.NET | dot net, .net framework")
+  VocabularySettingsStore.save(
+    VocabularySettingsStore.parse("Acme | ack me\n.NET | dot net, .net framework"))
   VocabularyTextCorrector.invalidate()
   #expect(VocabularyTextCorrector.apply(to: "We use ack me daily") == "We use Acme daily")
   // Aliases starting with a non-word character must still match: a plain \b
@@ -1159,7 +1211,7 @@ import Testing
   #expect(VocabularyTextCorrector.apply(to: "Jack meets us") == "Jack meets us")
 
   // The compiled patterns are cached until invalidated.
-  VocabularySettingsStore.save("Acme | jack")
+  VocabularySettingsStore.save(VocabularySettingsStore.parse("Acme | jack"))
   #expect(VocabularyTextCorrector.apply(to: "ask jack") == "ask jack")
   VocabularyTextCorrector.invalidate()
   #expect(VocabularyTextCorrector.apply(to: "ask jack") == "ask Acme")
@@ -1544,6 +1596,26 @@ import Testing
   // Header values stay single-line and ASCII-safe.
   #expect(RemoteSyncService.sanitizedHeaderValue("Line one\nLine two") == "Line one Line two")
   #expect(RemoteSyncService.sanitizedHeaderValue("Café ☕").contains("%") == true)
+}
+
+@Test func httpHookReadsTheHiddenArchiveStateFile() throws {
+  let manager = FileManager.default
+  let folder = manager.temporaryDirectory.appending(path: UUID().uuidString)
+  defer { try? manager.removeItem(at: folder) }
+  try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+
+  // A spooled meeting still uses the visible name.
+  try Data("{}".utf8).write(to: folder.appending(path: MeetingStore.stateFileName))
+  #expect(
+    RemoteSyncService.hookStateFile(in: folder).lastPathComponent
+      == MeetingStore.stateFileName)
+
+  // An archived meeting hides the state file; the hook must prefer it so
+  // metadata headers are not lost after promotion to the archive.
+  try Data("{}".utf8).write(to: folder.appending(path: MeetingStore.hiddenStateFileName))
+  #expect(
+    RemoteSyncService.hookStateFile(in: folder).lastPathComponent
+      == MeetingStore.hiddenStateFileName)
 }
 
 @Test func archiveHookAllowsAnEmptyCommandAndRequiresRemoteSyncWhenActive() {

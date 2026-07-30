@@ -207,6 +207,7 @@ struct MenuBarView: View {
           .textFieldStyle(.plain)
           .font(.body.weight(.semibold))
           .onSubmit { model.updateTitle() }
+          .onChange(of: model.title) { model.updateTitle() }
         if model.state == .recording || model.state == .paused {
           Text(model.elapsed.meetingTimestamp)
             .font(.system(.body, design: .monospaced, weight: .semibold))
@@ -618,6 +619,13 @@ struct MenuBarView: View {
 
   private var statusIcon: String {
     if case .failed = model.state { return "exclamationmark.triangle.fill" }
+    // A reported problem outranks the capture state, so the icon and the red
+    // or orange status text never disagree.
+    switch model.statusSeverity {
+    case .error: return "exclamationmark.triangle.fill"
+    case .warning: return "exclamationmark.circle"
+    case .info: break
+    }
     switch model.state {
     case .recording: return "waveform"
     case .paused: return "pause.fill"

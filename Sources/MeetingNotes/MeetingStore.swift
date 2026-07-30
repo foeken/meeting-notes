@@ -917,15 +917,23 @@ actor MeetingStore {
           document.status == .complete
         else { return nil }
         let safeTitle = document.title.filenameSafe.isEmpty ? "meeting" : document.title.filenameSafe
-        let expectedName =
-          "\(DateFormatter.fileTime.string(from: document.startedAt))-\(safeTitle)-\(document.id.uuidString.prefix(8))"
-        guard stateURL.deletingLastPathComponent().lastPathComponent != expectedName else {
+        // The time prefix is rendered in the local timezone, so a meeting
+        // recorded in another timezone would produce a different prefix
+        // forever. Any four-digit prefix is accepted; only the title and id
+        // parts must match, which keeps normalization timezone-stable.
+        let folderName = stateURL.deletingLastPathComponent().lastPathComponent
+        let expectedSuffix = "-\(safeTitle)-\(document.id.uuidString.prefix(8))"
+        let timePrefix = folderName.prefix(4)
+        let hasTimePrefix = timePrefix.count == 4 && timePrefix.allSatisfy(\.isNumber)
+        guard !(hasTimePrefix && folderName.dropFirst(4) == expectedSuffix) else {
           return nil
         }
         return (document.id, document.title)
       }
     for (id, title) in mismatches {
-      try? await renameCompletedMeeting(id: id, title: title)
+      // Startup repair is not a user-initiated rename: calendar participants
+      // and the organizer must survive it untouched.
+      try? await renameCompletedMeeting(id: id, title: title, preservingParticipants: true)
     }
   }
 
@@ -1079,7 +1087,9 @@ actor MeetingStore {
     }
   }
 
-  func renameCompletedMeeting(id: UUID, title: String) async throws {
+  func renameCompletedMeeting(
+    id: UUID, title: String, preservingParticipants: Bool = false
+  ) async throws {
     let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !cleanTitle.isEmpty else {
       throw NSError(
@@ -1095,8 +1105,10 @@ actor MeetingStore {
           document.status == .complete
         else { return nil }
         document.title = cleanTitle
-        document.calendar?.organizer = nil
-        document.calendar?.participants = []
+        if !preservingParticipants {
+          document.calendar?.organizer = nil
+          document.calendar?.participants = []
+        }
         return (url.deletingLastPathComponent(), document)
       }
       .first

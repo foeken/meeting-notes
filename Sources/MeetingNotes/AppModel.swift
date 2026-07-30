@@ -137,6 +137,9 @@ final class AppModel {
   private var calendarMetadata: CalendarMetadata?
   private var retentionMaintenanceTask: Task<Void, Never>?
   private var deferredNotesMaintenanceTask: Task<Void, Never>?
+  /// Guards `runDeferredNotesMaintenance` against overlapping runs without
+  /// touching the user-visible capture state.
+  private var deferredNotesMaintenanceRunning = false
   private var transientStatusTask: Task<Void, Never>?
   private var archiveSettingsSaveTask: Task<Void, Never>?
   private var hookSettingsSaveTask: Task<Void, Never>?
@@ -978,7 +981,19 @@ final class AppModel {
     if panel.runModal() == .OK, let url = panel.url {
       localArchivePathDraft = url.path
       settingsStatusText = ""
+      commitLocalArchivePath()
     }
+  }
+
+  /// The archive folder saves on explicit commit (Return, focus loss, or the
+  /// Choose… panel), never on a keystroke debounce: a half-typed path must not
+  /// trigger a relocation offer or a sync to the wrong place.
+  func commitLocalArchivePath() {
+    let saved = ArchiveSettingsStore.load().localPath
+    guard localArchivePathDraft.trimmingCharacters(in: .whitespacesAndNewlines) != saved else {
+      return
+    }
+    scheduleArchiveSettingsSave()
   }
 
   /// `startNewTask` forgets the meeting's stored task and creates a fresh one.
@@ -1301,7 +1316,7 @@ final class AppModel {
   }
 
   private func runDeferredNotesMaintenance(reportStatus: Bool) async {
-    guard state == .idle else { return }
+    guard state == .idle, !deferredNotesMaintenanceRunning else { return }
     let folders = await store.completedMeetingFoldersAwaitingInsights(before: Date())
     guard !folders.isEmpty else {
       enrichmentRetryAvailable = false
@@ -1312,11 +1327,16 @@ final class AppModel {
       return
     }
 
-    state = .processing
+    // Background maintenance must not hijack the capture state: `.processing`
+    // would disable the Record button for up to the whole batch. A separate
+    // flag guards re-entrancy, and the loop bails out when a recording starts.
+    deferredNotesMaintenanceRunning = true
+    defer { deferredNotesMaintenanceRunning = false }
     if reportStatus { statusText = "Creating delayed meeting notes…" }
     var lastError: Error?
     var enrichedMeetingIDs: [UUID] = []
     for folder in folders {
+      guard state == .idle else { break }
       do {
         let meeting = try await store.load(folder: folder)
         let insights = try await enricher.enrich(
@@ -1332,7 +1352,6 @@ final class AppModel {
       await notifyCodexSummaryReady(meetingID: meetingID)
     }
     await refreshMeetingDay()
-    state = .idle
     enrichmentRetryAvailable = lastError != nil
     if reportStatus {
       if let lastError {
@@ -1795,6 +1814,13 @@ final class AppModel {
     meetingAutoStopScheduler.cancel()
     recordingMeetingApp = nil
     recordingWakeLock.release()
+    // A title typed during the recording must survive even when the user
+    // never pressed Return in the title field.
+    let draftTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !draftTitle.isEmpty {
+      try? await store.updateTitle(
+        draftTitle, captureState: state == .paused ? "paused" : "recording")
+    }
     state = .processing
     statusText = "Saving recording…"
     timer?.invalidate()
@@ -1873,11 +1899,22 @@ final class AppModel {
       try? await Task.sleep(for: .seconds(1))
     }
 
+    // A delete cancels this task and awaits it; the expensive transcription
+    // and enrichment pipeline must never run for a meeting being removed.
+    guard !Task.isCancelled else {
+      pendingMeetingSummaries[meetingID] = nil
+      return
+    }
+
     if state == .idle { statusText = "Finishing transcript…" }
     var enrichmentWarning: String?
     var insights: MeetingInsights?
     do {
       let turns = try await final.process(microphone: microphoneURL, system: systemURL)
+      guard !Task.isCancelled else {
+        pendingMeetingSummaries[meetingID] = nil
+        return
+      }
       var document = stoppedMeeting.document
       document.transcript = turns
       document.status = .processing
@@ -1889,12 +1926,20 @@ final class AppModel {
       } catch {
         enrichmentWarning = error.localizedDescription
       }
+      guard !Task.isCancelled else {
+        pendingMeetingSummaries[meetingID] = nil
+        return
+      }
       _ = try await store.finalizeStoppedMeeting(
         in: stoppedMeeting.folder,
         turns: turns,
         insights: insights
       )
     } catch {
+      guard !Task.isCancelled else {
+        pendingMeetingSummaries[meetingID] = nil
+        return
+      }
       try? await store.markStoppedMeetingFailed(in: stoppedMeeting.folder)
       pendingMeetingSummaries[meetingID] = nil
       await refreshRecoverableMeetingAvailability()
@@ -1903,7 +1948,9 @@ final class AppModel {
       reportError("Finalization retained: \(error.localizedDescription)")
       return
     }
-    if insights != nil { await notifyCodexSummaryReady(meetingID: meetingID) }
+    if insights != nil, !Task.isCancelled {
+      await notifyCodexSummaryReady(meetingID: meetingID)
+    }
 
     // Once meeting.json and the Markdown artifacts are complete, housekeeping
     // failures must not downgrade the meeting back to failed.

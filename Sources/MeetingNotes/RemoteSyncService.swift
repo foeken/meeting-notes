@@ -505,6 +505,14 @@ actor RemoteSyncService {
     return headers
   }
 
+  /// The meeting state file used for hook metadata: an archived meeting hides
+  /// it as `.meeting.json`, a spooled meeting still uses `meeting.json`.
+  static func hookStateFile(in folder: URL) -> URL {
+    let hidden = folder.appending(path: MeetingStore.hiddenStateFileName)
+    if FileManager.default.fileExists(atPath: hidden.path) { return hidden }
+    return folder.appending(path: MeetingStore.stateFileName)
+  }
+
   private func httpHookDocument(
     configuration config: Configuration, folder: URL?
   ) throws -> HTTPHookDocument? {
@@ -523,7 +531,9 @@ actor RemoteSyncService {
       // example a purged transcript), is not a failure worth retrying.
       return nil
     }
-    let meeting = (try? Data(contentsOf: folder.appending(path: "meeting.json")))
+    // An archived meeting hides its state file as `.meeting.json`; fall back
+    // to the visible spool name so metadata headers are never silently lost.
+    let meeting = (try? Data(contentsOf: Self.hookStateFile(in: folder)))
       .flatMap { try? JSONDecoder.meetingDecoder.decode(MeetingDocument.self, from: $0) }
     return HTTPHookDocument(
       fileName: fileName,
