@@ -262,6 +262,8 @@ actor MeetingStore {
       return destination
     } catch {
       // The meeting stays fully usable in the spool; nothing was lost.
+      Self.logger.error(
+        "Promotion to archive failed for \(spoolFolder.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
       return spoolFolder
     }
   }
@@ -307,12 +309,22 @@ actor MeetingStore {
       if archivedComplete.contains(document.id) {
         // The archive copy is authoritative; the spool duplicate only wastes
         // space and re-creates the two-truths problem.
-        try? manager.removeItem(at: spoolFolder)
+        do {
+          try manager.removeItem(at: spoolFolder)
+        } catch {
+          Self.logger.error(
+            "Could not remove spool duplicate \(spoolFolder.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
         continue
       }
       // A stale non-complete mirror gives way to the finished meeting.
       if let staleFolder = archivedStale[document.id] {
-        try? manager.removeItem(at: staleFolder)
+        do {
+          try manager.removeItem(at: staleFolder)
+        } catch {
+          Self.logger.error(
+            "Could not remove stale archive mirror \(staleFolder.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
       }
       let destination = promoteToArchiveIfPossible(document: document, from: spoolFolder)
       if destination.standardizedFileURL != spoolFolder.standardizedFileURL { movedCount += 1 }
@@ -378,7 +390,12 @@ actor MeetingStore {
         // old sync. The spool still holds the authoritative capture, so the
         // mirror is safe to drop; it would otherwise shadow the invariant
         // that everything in the archive is finished.
-        try? manager.removeItem(at: archiveFolder)
+        do {
+          try manager.removeItem(at: archiveFolder)
+        } catch {
+          Self.logger.error(
+            "Could not remove stale mirror \(archiveFolder.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
       }
     }
   }
@@ -485,7 +502,22 @@ actor MeetingStore {
       let relative = source.pathComponents
         .suffix(Self.meetingPathComponentCount).joined(separator: "/")
       let destination = newRoot.appending(path: relative, directoryHint: .isDirectory)
-      guard !manager.fileExists(atPath: destination.path) else { continue }
+      if manager.fileExists(atPath: destination.path) {
+        // A destination folder with its own meeting state is a real meeting
+        // and is never touched. A state-less shell (a stale sync mirror or a
+        // half-finished earlier move) would otherwise strand the source
+        // meeting in the old archive forever, so it gives way.
+        let hasState = manager.fileExists(atPath: stateURL(in: destination).path)
+          || manager.fileExists(atPath: destination.appending(path: Self.stateFileName).path)
+        guard !hasState else { continue }
+        do {
+          try manager.removeItem(at: destination)
+        } catch {
+          Self.logger.error(
+            "Relocation could not replace shell at \(destination.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+          continue
+        }
+      }
       do {
         try manager.createDirectory(
           at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -494,7 +526,11 @@ actor MeetingStore {
         if folder?.standardizedFileURL == source.standardizedFileURL {
           folder = destination
         }
-      } catch { continue }
+      } catch {
+        Self.logger.error(
+          "Relocation failed for \(source.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        continue
+      }
     }
     return movedCount
   }
@@ -874,7 +910,16 @@ actor MeetingStore {
     process.arguments = ["-c", "-k", "--keepParent", archiveRoot.path, backup.path]
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
-    try? process.run()
+    do {
+      try process.run()
+    } catch {
+      // waitUntilExit on a never-launched process raises an ObjC exception;
+      // a failed launch simply means no backup this run.
+      Self.logger.error(
+        "Pre-migration backup could not start: \(error.localizedDescription, privacy: .public)")
+      try? manager.removeItem(at: backup)
+      return
+    }
     process.waitUntilExit()
     // A half-written zip is worse than none: it looks like a backup.
     if process.terminationStatus != 0 {

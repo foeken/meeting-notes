@@ -7,6 +7,7 @@ actor ChatGPTAuthService {
     case codexUnavailable
     case commandFailed(String)
     case missingOutput
+    case timedOut(TimeInterval)
 
     var errorDescription: String? {
       switch self {
@@ -16,6 +17,8 @@ actor ChatGPTAuthService {
         detail.isEmpty ? "ChatGPT sign-in failed." : detail
       case .missingOutput:
         "ChatGPT did not return structured meeting notes."
+      case .timedOut(let seconds):
+        "ChatGPT took longer than \(Int(seconds / 60)) minutes and was stopped. Try again."
       }
     }
   }
@@ -83,12 +86,23 @@ actor ChatGPTAuthService {
       "--output-schema", schemaURL.path, "--output-last-message", outputURL.path,
       "-C", temporary.path, "-",
     ]
-    let result = try await run(executable, arguments: arguments, input: Data(instruction.utf8))
+    let result = try await run(
+      executable, arguments: arguments, input: Data(instruction.utf8),
+      timeout: Self.generationTimeout(promptCharacterCount: instruction.count))
     guard result.status == 0 else { throw AuthError.commandFailed(cleanError(result.output)) }
     guard let data = try? Data(contentsOf: outputURL), !data.isEmpty else {
       throw AuthError.missingOutput
     }
     return data
+  }
+
+  /// A hung codex process must never wedge summary generation forever. The
+  /// deadline scales generously with the transcript size: 10 minutes plus one
+  /// minute per 20k prompt characters, capped at 20 minutes.
+  nonisolated static func generationTimeout(promptCharacterCount: Int) -> TimeInterval {
+    let base: TimeInterval = 600
+    let scaled = base + TimeInterval(promptCharacterCount / 20_000) * 60
+    return min(scaled, 1_200)
   }
 
   nonisolated static func instruction(prompt: String) -> String {
@@ -118,7 +132,7 @@ actor ChatGPTAuthService {
   }
 
   private func run(
-    _ executable: URL, arguments: [String], input: Data? = nil
+    _ executable: URL, arguments: [String], input: Data? = nil, timeout: TimeInterval? = nil
   ) async throws -> CommandResult {
     try fileManager.createDirectory(
       at: authHome, withIntermediateDirectories: true,
@@ -144,6 +158,21 @@ actor ChatGPTAuthService {
 
     return try await withCheckedThrowingContinuation { continuation in
       let resumeState = ResumeOnce()
+      // The watchdog terminates a hung codex process at the deadline. The
+      // process is held weakly and ResumeOnce guards the continuation, so a
+      // watchdog firing after normal termination is a harmless no-op.
+      if let timeout {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
+          [weak process] in
+          guard let process, process.isRunning else { return }
+          guard resumeState.claim() else { return }
+          process.terminate()
+          DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { [weak process] in
+            if let process, process.isRunning { process.interrupt() }
+          }
+          continuation.resume(throwing: AuthError.timedOut(timeout))
+        }
+      }
       process.terminationHandler = { process in
         try? logHandle.synchronize()
         let output = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""

@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 extension RemoteSyncService.Configuration {
   enum HookLocation: String, CaseIterable, Identifiable, Sendable {
@@ -158,11 +159,37 @@ enum ArchiveSettingsStore {
       postMeetingHookCommand: defaults.string(forKey: Key.postMeetingHookCommand)
         ?? fallback.postMeetingHookCommand,
       httpHookURL: defaults.string(forKey: Key.httpHookURL) ?? fallback.httpHookURL,
-      httpHookHeaders: seededHTTPHookHeaders(from: defaults, fallback: fallback.httpHookHeaders),
+      httpHookHeaders: loadHTTPHookHeaders(from: defaults, fallback: fallback.httpHookHeaders),
       httpHookPayload: defaults.string(forKey: Key.httpHookPayload)
         .flatMap(RemoteSyncService.Configuration.HookPayload.init(rawValue:))
         ?? fallback.httpHookPayload
     )
+  }
+
+  /// Headers commonly carry an Authorization bearer token, so they live in the
+  /// Keychain rather than plaintext UserDefaults. A legacy plaintext value is
+  /// migrated on first load, then removed from defaults. Test suites (any
+  /// non-standard UserDefaults) keep the plaintext path so they stay hermetic.
+  private static func loadHTTPHookHeaders(
+    from defaults: UserDefaults, fallback: String
+  ) -> String {
+    guard defaults === UserDefaults.standard else {
+      return seededHTTPHookHeaders(from: defaults, fallback: fallback)
+    }
+    if let stored = defaults.string(forKey: Key.httpHookHeaders) {
+      // Legacy plaintext value: move it into the Keychain once.
+      if HookHeaderKeychainStore.save(stored) {
+        defaults.removeObject(forKey: Key.httpHookHeaders)
+        if !stored.isEmpty { defaults.set(true, forKey: Key.httpHookHeadersSeeded) }
+      }
+      if stored.isEmpty, !defaults.bool(forKey: Key.httpHookHeadersSeeded) { return fallback }
+      return stored
+    }
+    if let secured = HookHeaderKeychainStore.load() {
+      if secured.isEmpty, !defaults.bool(forKey: Key.httpHookHeadersSeeded) { return fallback }
+      return secured
+    }
+    return fallback
   }
 
   /// Shows the example headers until the user saves the field themselves.
@@ -173,6 +200,16 @@ enum ArchiveSettingsStore {
     guard let stored = defaults.string(forKey: Key.httpHookHeaders) else { return fallback }
     if stored.isEmpty, !defaults.bool(forKey: Key.httpHookHeadersSeeded) { return fallback }
     return stored
+  }
+
+  private static func persistHTTPHookHeaders(_ headers: String, to defaults: UserDefaults) {
+    if defaults === UserDefaults.standard, HookHeaderKeychainStore.save(headers) {
+      defaults.removeObject(forKey: Key.httpHookHeaders)
+    } else {
+      // Keychain unavailable (or a test suite): plaintext keeps working so the
+      // user's hook never silently loses its credentials.
+      defaults.set(headers, forKey: Key.httpHookHeaders)
+    }
   }
 
   static func save(
@@ -187,7 +224,7 @@ enum ArchiveSettingsStore {
     defaults.set(configuration.postMeetingHookLocation.rawValue, forKey: Key.postMeetingHookLocation)
     defaults.set(configuration.postMeetingHookCommand, forKey: Key.postMeetingHookCommand)
     defaults.set(configuration.httpHookURL, forKey: Key.httpHookURL)
-    defaults.set(configuration.httpHookHeaders, forKey: Key.httpHookHeaders)
+    persistHTTPHookHeaders(configuration.httpHookHeaders, to: defaults)
     defaults.set(configuration.httpHookPayload.rawValue, forKey: Key.httpHookPayload)
   }
 
@@ -218,8 +255,51 @@ enum ArchiveSettingsStore {
     to defaults: UserDefaults = .standard
   ) {
     defaults.set(url, forKey: Key.httpHookURL)
-    defaults.set(headers, forKey: Key.httpHookHeaders)
+    persistHTTPHookHeaders(headers, to: defaults)
     defaults.set(payload.rawValue, forKey: Key.httpHookPayload)
     defaults.set(true, forKey: Key.httpHookHeadersSeeded)
+  }
+}
+
+/// Stores the HTTP hook header block as a generic Keychain password, mirroring
+/// TanaOAuthService's token storage. The block frequently contains an
+/// Authorization bearer token that must not sit in plaintext UserDefaults.
+enum HookHeaderKeychainStore {
+  static let service = "app.meetingnotes.menu.httphook"
+  private static let account = "headers"
+
+  private static var baseQuery: [String: Any] {
+    [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account,
+    ]
+  }
+
+  @discardableResult
+  static func save(_ headers: String) -> Bool {
+    let deleteStatus = SecItemDelete(baseQuery as CFDictionary)
+    guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+      return false
+    }
+    var item = baseQuery
+    item[kSecValueData as String] = Data(headers.utf8)
+    item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+  }
+
+  static func load() -> String? {
+    var query = baseQuery
+    query[kSecReturnData as String] = true
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+    var result: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+      let data = result as? Data
+    else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+
+  static func delete() {
+    SecItemDelete(baseQuery as CFDictionary)
   }
 }

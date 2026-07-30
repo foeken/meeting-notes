@@ -629,6 +629,7 @@ private struct SummariesSettingsPane: View {
 
 private struct StorageSettingsPane: View {
   @Bindable var model: AppModel
+  @FocusState private var archivePathFieldFocused: Bool
 
   var body: some View {
     ScrollView {
@@ -648,7 +649,11 @@ private struct StorageSettingsPane: View {
             Text("Folder")
               .gridColumnAlignment(.trailing)
             HStack(spacing: 8) {
+              // The archive folder commits on Return or focus loss only: a
+              // debounce would try to relocate meetings into half-typed paths.
               TextField("Meeting Notes", text: $model.localArchivePathDraft)
+                .focused($archivePathFieldFocused)
+                .onSubmit(model.commitLocalArchivePath)
               Button("Choose…", action: model.chooseLocalArchiveDirectory)
             }
           }
@@ -753,7 +758,9 @@ private struct StorageSettingsPane: View {
       }
       .padding(28)
     }
-    .onChange(of: model.localArchivePathDraft, model.scheduleArchiveSettingsSave)
+    .onChange(of: archivePathFieldFocused) { _, focused in
+      if !focused { model.commitLocalArchivePath() }
+    }
     .onChange(of: model.remoteSyncEnabled, model.scheduleArchiveSettingsSave)
     .onChange(of: model.remoteHostDraft, model.scheduleArchiveSettingsSave)
     .onChange(of: model.remotePathDraft, model.scheduleArchiveSettingsSave)

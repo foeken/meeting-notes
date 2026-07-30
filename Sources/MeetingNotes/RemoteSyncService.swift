@@ -4,6 +4,7 @@ actor RemoteSyncService {
   static let folderMarker = ".remote-sync-pending"
   static let renameMarker = ".remote-rename-from"
   static let pointerMarker = ".current-sync-pending"
+  static let hookDoneMarker = ".post-hook-done"
 
   struct Configuration: Equatable, Sendable {
     static let defaultLocalPath = "~/Documents/Meetings Notes"
@@ -84,6 +85,7 @@ actor RemoteSyncService {
   private var pendingPointer: URL?
   private var worker: Task<Void, Never>?
   private var isFlushing = false
+  private var retryAttempts = 0
   private(set) var lastError: String?
   private(set) var lastSyncAt: Date?
 
@@ -126,11 +128,7 @@ actor RemoteSyncService {
     var options = pending[folder] ?? SyncOptions()
     options.runHookAfterSync = options.runHookAfterSync || runHookAfterSync
     pending[folder] = options
-    guard worker == nil, !isFlushing else { return }
-    worker = Task {
-      try? await Task.sleep(for: .milliseconds(750))
-      await flush()
-    }
+    scheduleAfterEnqueue(delay: .milliseconds(750))
   }
 
   func enqueueRename(folder: URL, previousFolder: URL, previousRelativePath: String) {
@@ -146,19 +144,27 @@ actor RemoteSyncService {
     options.runHookAfterSync = true
     options.previousRelativePath = previousRelativePath
     pending[folder] = options
-    guard worker == nil, !isFlushing else { return }
-    worker = Task {
-      try? await Task.sleep(for: .milliseconds(250))
-      await flush()
-    }
+    scheduleAfterEnqueue(delay: .milliseconds(250))
   }
 
   func enqueuePointer(_ file: URL) {
     guard configuration.enabled else { return }
     pendingPointer = file
+    scheduleAfterEnqueue(delay: .milliseconds(250))
+  }
+
+  /// New work always deserves a prompt attempt: an in-flight retry backoff
+  /// (which can reach minutes) must not delay a freshly finished meeting.
+  private func scheduleAfterEnqueue(delay: Duration) {
+    if retryAttempts > 0 { retryAttempts = 0 }
+    if let worker, !isFlushing {
+      worker.cancel()
+      self.worker = nil
+    }
     guard worker == nil, !isFlushing else { return }
     worker = Task {
-      try? await Task.sleep(for: .milliseconds(250))
+      try? await Task.sleep(for: delay)
+      guard !Task.isCancelled else { return }
       await flush()
     }
   }
@@ -206,9 +212,16 @@ actor RemoteSyncService {
         if let previousRelativePath = options.previousRelativePath {
           try await deleteArchiveFolder(relative: previousRelativePath, clearPointer: false)
         }
-        if options.runHookAfterSync { try await runPostMeetingHook(folder: folder) }
+        // A hook fires once per document revision. A sync retry (remote was
+        // briefly unreachable) or a relaunch reconcile must not re-run a hook
+        // that already succeeded for unchanged content.
+        if options.runHookAfterSync, !Self.hookAlreadyCompleted(folder: folder, revision: revision) {
+          try await runPostMeetingHook(folder: folder)
+          Self.markHookCompleted(folder: folder, revision: revision)
+        }
         if (try? Data(contentsOf: marker)) == revision {
           try? FileManager.default.removeItem(at: marker)
+          try? FileManager.default.removeItem(at: folder.appending(path: Self.hookDoneMarker))
           if options.previousRelativePath != nil {
             try? FileManager.default.removeItem(at: folder.appending(path: Self.renameMarker))
             renamedFolders = renamedFolders.filter { $0.value != folder }
@@ -248,12 +261,36 @@ actor RemoteSyncService {
       }
     }
     lastError = errors.isEmpty ? nil : errors.joined(separator: "; ")
+    retryAttempts = errors.isEmpty ? 0 : min(retryAttempts + 1, 6)
     if !pending.isEmpty || pendingPointer != nil, worker == nil {
+      // Failures back off exponentially (10s, 20s, … capped at 10 minutes) so
+      // an unreachable remote is not hammered; any new enqueue resets this.
+      let delay = Self.retryDelay(attempt: retryAttempts)
       worker = Task {
-        try? await Task.sleep(for: .seconds(10))
+        try? await Task.sleep(for: delay)
+        guard !Task.isCancelled else { return }
         await flush()
       }
     }
+  }
+
+  /// Exponential backoff for failed flushes: 10s, 20s, 40s, … capped at 10
+  /// minutes. Attempt 0 (no failure yet) keeps the original 10s cadence.
+  static func retryDelay(attempt: Int) -> Duration {
+    let clamped = min(max(attempt, 0), 6)
+    return .seconds(min(10 << clamped, 600))
+  }
+
+  /// True when the post-meeting hook already ran for this exact document
+  /// revision (the sync marker's content at the time the hook succeeded).
+  nonisolated static func hookAlreadyCompleted(folder: URL, revision: Data?) -> Bool {
+    guard let revision else { return false }
+    return (try? Data(contentsOf: folder.appending(path: hookDoneMarker))) == revision
+  }
+
+  nonisolated static func markHookCompleted(folder: URL, revision: Data?) {
+    guard let revision else { return }
+    try? revision.write(to: folder.appending(path: hookDoneMarker), options: .atomic)
   }
 
   /// Restore work that survived an app quit or a Mac restart.
@@ -568,6 +605,16 @@ actor RemoteSyncService {
     // never run when source and destination are the same folder: rsync with
     // --delete-excluded would delete the very audio it excludes.
     if !folderPath.hasPrefix(archive.path + "/") {
+      let localTarget = archive.appending(path: tail, directoryHint: .isDirectory)
+      guard !Self.isSamePhysicalDirectory(folder, localTarget) else {
+        // A symlinked or otherwise aliased archive path can make the "copy"
+        // destination the very folder being synced; rsync with
+        // --delete-excluded would then destroy the audio it excludes.
+        if config.remoteSyncEnabled {
+          try await syncRemoteLeg(folder: folder, tail: tail, config: config)
+        }
+        return
+      }
       // The local mirror of a meeting still in the spool must never contain
       // its state file unless the meeting is finished: a mirrored
       // meeting.json makes the same meeting appear twice in the UI. Live
@@ -576,7 +623,6 @@ actor RemoteSyncService {
       let document = (try? Data(contentsOf: folder.appending(path: MeetingStore.stateFileName)))
         .flatMap { try? JSONDecoder.meetingDecoder.decode(MeetingDocument.self, from: $0) }
       let isComplete = document?.status == .complete
-      let localTarget = archive.appending(path: tail, directoryHint: .isDirectory)
       try FileManager.default.createDirectory(at: localTarget, withIntermediateDirectories: true)
       try await sync(
         folder: folder, destination: localTarget.path + "/", remotely: false,
@@ -589,14 +635,33 @@ actor RemoteSyncService {
     }
 
     if config.remoteSyncEnabled {
-      let remoteFolder = "\(config.path)/\(tail)/"
-      try await run(
-        "/usr/bin/ssh",
-        strictSSHArguments(host: config.host) + ["mkdir", "-p", remoteFolder])
-      try await sync(
-        folder: folder, destination: "\(config.host):\(remoteFolder)", remotely: true,
-        excludeState: false)
+      try await syncRemoteLeg(folder: folder, tail: tail, config: config)
     }
+  }
+
+  private func syncRemoteLeg(folder: URL, tail: String, config: Configuration) async throws {
+    let remoteFolder = "\(config.path)/\(tail)/"
+    try await run(
+      "/usr/bin/ssh",
+      strictSSHArguments(host: config.host) + ["mkdir", "-p", remoteFolder])
+    try await sync(
+      folder: folder, destination: "\(config.host):\(remoteFolder)", remotely: true,
+      excludeState: false)
+  }
+
+  /// Compares filesystem identity, so symlinked paths that point at the same
+  /// physical directory are recognized even when their strings differ.
+  static func isSamePhysicalDirectory(_ first: URL, _ second: URL) -> Bool {
+    let resolvedFirst = first.resolvingSymlinksInPath().standardizedFileURL
+    let resolvedSecond = second.resolvingSymlinksInPath().standardizedFileURL
+    if resolvedFirst.path == resolvedSecond.path { return true }
+    guard
+      let firstID = try? resolvedFirst.resourceValues(
+        forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier,
+      let secondID = try? resolvedSecond.resourceValues(
+        forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+    else { return false }
+    return firstID.isEqual(secondID)
   }
 
   private func sync(
@@ -619,6 +684,7 @@ actor RemoteSyncService {
     }
     arguments += ["--exclude", Self.folderMarker]
     arguments += ["--exclude", Self.renameMarker]
+    arguments += ["--exclude", Self.hookDoneMarker]
     arguments += [folder.path + "/", destination]
     try await run("/usr/bin/rsync", arguments)
   }
