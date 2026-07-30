@@ -127,9 +127,9 @@ private struct WindowKeyObserver: NSViewRepresentable {
 private enum SettingsPane: String, CaseIterable, Identifiable {
   case general
   case codex
-  case summaries
   case dictionary
   case microphone
+  case summaries
   case transcriptions
   case storage
   case hooks
