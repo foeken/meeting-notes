@@ -8,14 +8,8 @@ actor RemoteSyncService {
 
   struct Configuration: Equatable, Sendable {
     static let defaultLocalPath = "~/Documents/Meetings Notes"
-    /// Prefilled so the expected `Name: value` shape is obvious. Edit or clear
-    /// these before pointing the hook at a real endpoint.
-    static let defaultHTTPHookHeaders = """
-      Authorization: Bearer sk-example-token
-      X-Source: Meeting Notes
-      """
 
-    var destination: Destination
+    var remoteSyncEnabled: Bool
     var host: String
     var path: String
     var localPath: String
@@ -27,13 +21,8 @@ actor RemoteSyncService {
     var httpHookHeaders: String
     var httpHookPayload: HookPayload
 
-    var remoteSyncEnabled: Bool {
-      get { destination == .remote }
-      set { destination = newValue ? .remote : .local }
-    }
-
     init(
-      destination: Destination = .remote,
+      remoteSyncEnabled: Bool = true,
       host: String,
       path: String,
       localPath: String = Configuration.defaultLocalPath,
@@ -42,10 +31,10 @@ actor RemoteSyncService {
       postMeetingHookLocation: HookLocation = .disabled,
       postMeetingHookCommand: String = "",
       httpHookURL: String = "",
-      httpHookHeaders: String = Configuration.defaultHTTPHookHeaders,
+      httpHookHeaders: String = "",
       httpHookPayload: HookPayload = .meetingNotes
     ) {
-      self.destination = destination
+      self.remoteSyncEnabled = remoteSyncEnabled
       self.host = host
       self.path = path
       self.localPath = localPath
@@ -60,7 +49,7 @@ actor RemoteSyncService {
 
     static var defaults: Configuration {
       Configuration(
-        destination: .local,
+        remoteSyncEnabled: false,
         host: "",
         path: "~/MeetingNotes",
         localPath: defaultLocalPath,
@@ -69,7 +58,7 @@ actor RemoteSyncService {
         postMeetingHookLocation: .disabled,
         postMeetingHookCommand: "",
         httpHookURL: "",
-        httpHookHeaders: defaultHTTPHookHeaders,
+        httpHookHeaders: "",
         httpHookPayload: .meetingNotes
       )
     }
@@ -544,11 +533,7 @@ actor RemoteSyncService {
 
   /// The meeting state file used for hook metadata: an archived meeting hides
   /// it as `.meeting.json`, a spooled meeting still uses `meeting.json`.
-  static func hookStateFile(in folder: URL) -> URL {
-    let hidden = folder.appending(path: MeetingStore.hiddenStateFileName)
-    if FileManager.default.fileExists(atPath: hidden.path) { return hidden }
-    return folder.appending(path: MeetingStore.stateFileName)
-  }
+  static func hookStateFile(in folder: URL) -> URL { MeetingStore.stateFile(in: folder) }
 
   private func httpHookDocument(
     configuration config: Configuration, folder: URL?

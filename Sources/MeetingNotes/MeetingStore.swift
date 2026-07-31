@@ -68,11 +68,13 @@ actor MeetingStore {
   }
 
   /// The state file inside `folder`, preferring the hidden archive name.
-  private func stateURL(in folder: URL) -> URL {
+  static func stateFile(in folder: URL) -> URL {
     let hidden = folder.appending(path: Self.hiddenStateFileName)
     if FileManager.default.fileExists(atPath: hidden.path) { return hidden }
     return folder.appending(path: Self.stateFileName)
   }
+
+  private func stateURL(in folder: URL) -> URL { Self.stateFile(in: folder) }
 
   private func isArchiveFolder(_ folder: URL) -> Bool {
     folder.standardizedFileURL.path.hasPrefix(archiveRoot.standardizedFileURL.path + "/")

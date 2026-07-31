@@ -847,7 +847,7 @@ final class AppModel {
 
   private var archiveConfiguration: RemoteSyncService.Configuration {
     RemoteSyncService.Configuration(
-      destination: remoteSyncEnabled ? .remote : .local,
+      remoteSyncEnabled: remoteSyncEnabled,
       host: remoteHostDraft.trimmingCharacters(in: .whitespacesAndNewlines),
       path: remotePathDraft.trimmingCharacters(in: .whitespacesAndNewlines),
       localPath: localArchivePathDraft.trimmingCharacters(in: .whitespacesAndNewlines),

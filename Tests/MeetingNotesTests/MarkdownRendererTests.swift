@@ -1455,7 +1455,7 @@ import Testing
 
   let sync = RemoteSyncService(
     configuration: .init(
-      destination: .local, host: "", path: "", localPath: archive.path, enabled: true))
+      remoteSyncEnabled: false, host: "", path: "", localPath: archive.path, enabled: true))
   let store = MeetingStore(root: spool, sync: sync)
 
   // A completed meeting written in the original layout, including audio and
@@ -1528,7 +1528,7 @@ import Testing
 
   let sync = RemoteSyncService(
     configuration: .init(
-      destination: .local, host: "", path: "",
+      remoteSyncEnabled: false, host: "", path: "",
       localPath: base.appending(path: "archive").path, enabled: true))
   let store = MeetingStore(root: spool, sync: sync)
 
@@ -1555,7 +1555,6 @@ import Testing
   defer { defaults.removePersistentDomain(forName: suite) }
 
   let initial = ArchiveSettingsStore.load(from: defaults)
-  #expect(initial.destination == .local)
   #expect(!initial.remoteSyncEnabled)
   #expect(initial.host.isEmpty)
   #expect(
@@ -1563,15 +1562,12 @@ import Testing
   #expect(initial.postMeetingHookLocation == .disabled)
   #expect(initial.postMeetingHookCommand.isEmpty)
   #expect(initial.httpHookURL.isEmpty)
-  // Headers ship prefilled with an example so the expected shape is obvious.
-  #expect(
-    initial.httpHookHeaders
-      == RemoteSyncService.Configuration.defaultHTTPHookHeaders)
-  #expect(initial.httpHookHeaders.contains("Authorization: Bearer"))
+  // Headers start empty; the UI shows the expected shape as placeholder text.
+  #expect(initial.httpHookHeaders.isEmpty)
   #expect(initial.httpHookPayload == .meetingNotes)
 
   let local = RemoteSyncService.Configuration(
-    destination: .local, host: initial.host, path: initial.path,
+    remoteSyncEnabled: false, host: initial.host, path: initial.path,
     localPath: "/tmp/Meeting Notes Archive", enabled: true,
     postMeetingHookLocation: .local,
     postMeetingHookCommand: "meeting-index refresh",
@@ -1605,12 +1601,6 @@ import Testing
   #expect(crlfHeaders.count == 2)
   #expect(crlfHeaders[0] == Configuration.HTTPHookHeader(name: "X-One", value: "alpha"))
   #expect(crlfHeaders[1] == Configuration.HTTPHookHeader(name: "X-Two", value: "beta"))
-
-  // The seeded example token is a template, never a real credential; it is
-  // dropped so it cannot reach an endpoint unedited.
-  let seeded = Configuration.parseHookHeaders(Configuration.defaultHTTPHookHeaders)
-  #expect(!seeded.contains { $0.name == "Authorization" })
-  #expect(seeded.contains { $0.name == "X-Source" })
 
   // An empty URL means the hook is simply off, not misconfigured.
   #expect(Configuration.httpHookURLError("") == nil)
@@ -1960,7 +1950,7 @@ import Testing
   defer { try? FileManager.default.removeItem(at: base) }
   let sync = RemoteSyncService(
     configuration: .init(
-      destination: .local, host: "", path: "", localPath: archive.path, enabled: true))
+      remoteSyncEnabled: false, host: "", path: "", localPath: archive.path, enabled: true))
   let store = MeetingStore(root: spool, sync: sync)
   _ = try await store.begin(title: "Local archive", calendar: nil)
   let folder = try #require(await store.currentFolder())
@@ -1987,7 +1977,7 @@ import Testing
   defer { try? FileManager.default.removeItem(at: base) }
   let sync = RemoteSyncService(
     configuration: .init(
-      destination: .local, host: "", path: "", localPath: archive.path, enabled: true,
+      remoteSyncEnabled: false, host: "", path: "", localPath: archive.path, enabled: true,
       includeAudio: true))
   let store = MeetingStore(root: spool, sync: sync)
   _ = try await store.begin(title: "Retained audio", calendar: nil)

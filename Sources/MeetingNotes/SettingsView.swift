@@ -924,14 +924,25 @@ private struct HookSettingsPane: View {
             GridRow {
               Text("Headers")
                 .gridColumnAlignment(.trailing)
-              GrowingTextEditor(text: $model.httpHookHeadersDraft, minHeight: 72)
-                .padding(2)
-                .background(
-                  Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                .overlay {
-                  RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(nsColor: .separatorColor))
+              ZStack(alignment: .topLeading) {
+                GrowingTextEditor(text: $model.httpHookHeadersDraft, minHeight: 72)
+                  .padding(2)
+                  .background(
+                    Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                  .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                      .stroke(Color(nsColor: .separatorColor))
+                  }
+
+                if model.httpHookHeadersDraft.isEmpty {
+                  Text("Authorization: Bearer your-token\nX-Source: Meeting Notes")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 8)
+                    .allowsHitTesting(false)
                 }
+              }
             }
           }
         }
@@ -1655,79 +1666,20 @@ private struct SettingsWindowConfigurator: NSViewRepresentable {
 /// A plain-text editor that reports its full content height instead of
 /// scrolling internally, so a settings pane shows one scrollbar rather than a
 /// scroll view nested inside another scroll view.
-private struct GrowingTextEditor: NSViewRepresentable {
+/// The native editor covers settings text areas: a fixed comfortable height
+/// with internal scrolling, instead of the previous hand-rolled auto-growing
+/// NSTextView with its off-screen measuring stack.
+private struct GrowingTextEditor: View {
   @Binding var text: String
   var minHeight: CGFloat = 120
 
-  final class Coordinator: NSObject, NSTextViewDelegate {
-    var parent: GrowingTextEditor
-    /// Height is measured with a private text stack. Measuring through the
-    /// live text container would leave it sized for measurement rather than
-    /// for the visible frame, and the editor would then draw over the
-    /// controls below it.
-    private let measuringStorage = NSTextStorage()
-    private let measuringLayout = NSLayoutManager()
-    private let measuringContainer = NSTextContainer()
-
-    init(_ parent: GrowingTextEditor) {
-      self.parent = parent
-      super.init()
-      measuringStorage.addLayoutManager(measuringLayout)
-      measuringLayout.addTextContainer(measuringContainer)
-      measuringContainer.lineFragmentPadding = 5
-    }
-
-    func measuredHeight(
-      text: String, font: NSFont, width: CGFloat, insets: NSSize
-    ) -> CGFloat {
-      // A trailing newline has no glyphs, so pad it to keep the caret's line.
-      let measured = text.isEmpty ? " " : (text.hasSuffix("\n") ? text + " " : text)
-      measuringContainer.size = NSSize(
-        width: max(1, width - insets.width * 2), height: .greatestFiniteMagnitude)
-      measuringStorage.setAttributedString(
-        NSAttributedString(string: measured, attributes: [.font: font]))
-      measuringLayout.ensureLayout(for: measuringContainer)
-      return measuringLayout.usedRect(for: measuringContainer).height + insets.height * 2
-    }
-
-    func textDidChange(_ notification: Notification) {
-      guard let textView = notification.object as? NSTextView else { return }
-      parent.text = textView.string
-    }
-  }
-
-  func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-  func makeNSView(context: Context) -> NSTextView {
-    let textView = NSTextView()
-    textView.delegate = context.coordinator
-    textView.isRichText = false
-    textView.allowsUndo = true
-    textView.drawsBackground = false
-    textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-    textView.textContainerInset = NSSize(width: 6, height: 8)
-    textView.isVerticallyResizable = false
-    textView.isHorizontallyResizable = false
-    textView.textContainer?.widthTracksTextView = true
-    textView.textContainer?.heightTracksTextView = true
-    textView.string = text
-    return textView
-  }
-
-  func updateNSView(_ textView: NSTextView, context: Context) {
-    context.coordinator.parent = self
-    if textView.string != text { textView.string = text }
-  }
-
-  func sizeThatFits(
-    _ proposal: ProposedViewSize, nsView textView: NSTextView, context: Context
-  ) -> CGSize? {
-    guard let width = proposal.width, width > 0,
-      let font = textView.font
-    else { return nil }
-    let contentHeight = context.coordinator.measuredHeight(
-      text: text, font: font, width: width, insets: textView.textContainerInset)
-    return CGSize(width: width, height: max(minHeight, contentHeight.rounded(.up)))
+  var body: some View {
+    TextEditor(text: $text)
+      .font(.system(.body, design: .monospaced))
+      .scrollContentBackground(.hidden)
+      .padding(.horizontal, 2)
+      .padding(.vertical, 4)
+      .frame(minHeight: minHeight, maxHeight: max(minHeight, 320))
   }
 }
 

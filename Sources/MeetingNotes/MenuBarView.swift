@@ -1,6 +1,31 @@
 import AppKit
 import SwiftUI
 
+/// Tracks whether Option is held so a view can offer an alternate action.
+/// The popover does not receive key events while it is open, so this observes
+/// the modifier flags directly.
+@MainActor
+@Observable
+final class OptionKeyMonitor {
+  private(set) var isPressed = NSEvent.modifierFlags.contains(.option)
+  @ObservationIgnored private var monitor: Any?
+
+  func start() {
+    guard monitor == nil else { return }
+    isPressed = NSEvent.modifierFlags.contains(.option)
+    monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+      MainActor.assumeIsolated { self?.isPressed = event.modifierFlags.contains(.option) }
+      return event
+    }
+  }
+
+  func stop() {
+    if let monitor { NSEvent.removeMonitor(monitor) }
+    monitor = nil
+    isPressed = false
+  }
+}
+
 struct MenuBarView: View {
   @Bindable var model: AppModel
   @Environment(\.openSettings) private var openSettings

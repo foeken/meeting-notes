@@ -56,15 +56,9 @@ extension RemoteSyncService.Configuration {
       let name = trimmed[..<separator].trimmingCharacters(in: .whitespaces)
       let value = trimmed[trimmed.index(after: separator)...]
         .trimmingCharacters(in: .whitespaces)
-      guard !name.isEmpty, !value.isEmpty, !isExampleHeaderValue(value) else { return nil }
+      guard !name.isEmpty, !value.isEmpty else { return nil }
       return HTTPHookHeader(name: name, value: value)
     }
-  }
-
-  /// The seeded example token must never reach a real endpoint. It is only a
-  /// template showing the `Name: value` shape until the user edits it.
-  static func isExampleHeaderValue(_ value: String) -> Bool {
-    value.contains("sk-example-token")
   }
 
   /// Validates the destination of an HTTP hook without revealing header values.
@@ -78,14 +72,6 @@ extension RemoteSyncService.Configuration {
       return "The URL must start with https:// or http://."
     }
     return nil
-  }
-
-  enum Destination: String, CaseIterable, Identifiable, Sendable {
-    case remote
-    case local
-
-    var id: String { rawValue }
-    var label: String { self == .remote ? "Remote server" : "This Mac" }
   }
 
   var validationError: String? {
@@ -124,6 +110,7 @@ extension RemoteSyncService.Configuration {
 
 enum ArchiveSettingsStore {
   private enum Key {
+    /// Legacy key, read once for migration; no longer written.
     static let destination = "archive.destination"
     static let remoteHost = "archive.remoteHost"
     static let remotePath = "archive.remotePath"
@@ -134,21 +121,18 @@ enum ArchiveSettingsStore {
     static let httpHookURL = "archive.httpHookURL"
     static let httpHookHeaders = "archive.httpHookHeaders"
     static let httpHookPayload = "archive.httpHookPayload"
-    static let httpHookHeadersSeeded = "archive.httpHookHeadersSeeded"
   }
 
   static func load(from defaults: UserDefaults = .standard) -> RemoteSyncService.Configuration {
     let fallback = RemoteSyncService.Configuration.defaults
-    let legacyDestination = defaults.string(forKey: Key.destination)
-      .flatMap(RemoteSyncService.Configuration.Destination.init(rawValue:)) ?? fallback.destination
     let remoteEnabled = (defaults.object(forKey: Key.remoteEnabled) as? Bool)
-      ?? (legacyDestination == .remote)
+      ?? (defaults.string(forKey: Key.destination) == "remote")
     let storedLocalPath = defaults.string(forKey: Key.localPath)
     let localPath = storedLocalPath == "~/MeetingNotes" && remoteEnabled
       ? RemoteSyncService.Configuration.defaultLocalPath
       : (storedLocalPath ?? fallback.localPath)
     return RemoteSyncService.Configuration(
-      destination: remoteEnabled ? .remote : .local,
+      remoteSyncEnabled: remoteEnabled,
       host: defaults.string(forKey: Key.remoteHost) ?? fallback.host,
       path: defaults.string(forKey: Key.remotePath) ?? fallback.path,
       localPath: localPath,
@@ -159,7 +143,7 @@ enum ArchiveSettingsStore {
       postMeetingHookCommand: defaults.string(forKey: Key.postMeetingHookCommand)
         ?? fallback.postMeetingHookCommand,
       httpHookURL: defaults.string(forKey: Key.httpHookURL) ?? fallback.httpHookURL,
-      httpHookHeaders: loadHTTPHookHeaders(from: defaults, fallback: fallback.httpHookHeaders),
+      httpHookHeaders: loadHTTPHookHeaders(from: defaults),
       httpHookPayload: defaults.string(forKey: Key.httpHookPayload)
         .flatMap(RemoteSyncService.Configuration.HookPayload.init(rawValue:))
         ?? fallback.httpHookPayload
@@ -170,36 +154,20 @@ enum ArchiveSettingsStore {
   /// Keychain rather than plaintext UserDefaults. A legacy plaintext value is
   /// migrated on first load, then removed from defaults. Test suites (any
   /// non-standard UserDefaults) keep the plaintext path so they stay hermetic.
-  private static func loadHTTPHookHeaders(
-    from defaults: UserDefaults, fallback: String
-  ) -> String {
+  private static func loadHTTPHookHeaders(from defaults: UserDefaults) -> String {
     guard defaults === UserDefaults.standard else {
-      return seededHTTPHookHeaders(from: defaults, fallback: fallback)
+      return defaults.string(forKey: Key.httpHookHeaders) ?? ""
     }
     if let stored = defaults.string(forKey: Key.httpHookHeaders) {
-      // Legacy plaintext value: move it into the Keychain once.
-      if HookHeaderKeychainStore.save(stored) {
+      // Legacy plaintext value: move it into the Keychain once. Old seeded
+      // example headers are dropped rather than migrated.
+      let cleaned = stored.contains("sk-example-token") ? "" : stored
+      if HookHeaderKeychainStore.save(cleaned) {
         defaults.removeObject(forKey: Key.httpHookHeaders)
-        if !stored.isEmpty { defaults.set(true, forKey: Key.httpHookHeadersSeeded) }
       }
-      if stored.isEmpty, !defaults.bool(forKey: Key.httpHookHeadersSeeded) { return fallback }
-      return stored
+      return cleaned
     }
-    if let secured = HookHeaderKeychainStore.load() {
-      if secured.isEmpty, !defaults.bool(forKey: Key.httpHookHeadersSeeded) { return fallback }
-      return secured
-    }
-    return fallback
-  }
-
-  /// Shows the example headers until the user saves the field themselves.
-  /// After that their value wins, including a deliberately empty one.
-  private static func seededHTTPHookHeaders(
-    from defaults: UserDefaults, fallback: String
-  ) -> String {
-    guard let stored = defaults.string(forKey: Key.httpHookHeaders) else { return fallback }
-    if stored.isEmpty, !defaults.bool(forKey: Key.httpHookHeadersSeeded) { return fallback }
-    return stored
+    return HookHeaderKeychainStore.load() ?? ""
   }
 
   private static func persistHTTPHookHeaders(_ headers: String, to defaults: UserDefaults) {
@@ -216,7 +184,6 @@ enum ArchiveSettingsStore {
     _ configuration: RemoteSyncService.Configuration,
     to defaults: UserDefaults = .standard
   ) {
-    defaults.set(configuration.destination.rawValue, forKey: Key.destination)
     defaults.set(configuration.remoteSyncEnabled, forKey: Key.remoteEnabled)
     defaults.set(configuration.host, forKey: Key.remoteHost)
     defaults.set(configuration.path, forKey: Key.remotePath)
@@ -232,7 +199,6 @@ enum ArchiveSettingsStore {
     _ configuration: RemoteSyncService.Configuration,
     to defaults: UserDefaults = .standard
   ) {
-    defaults.set(configuration.destination.rawValue, forKey: Key.destination)
     defaults.set(configuration.remoteSyncEnabled, forKey: Key.remoteEnabled)
     defaults.set(configuration.host, forKey: Key.remoteHost)
     defaults.set(configuration.path, forKey: Key.remotePath)
@@ -257,7 +223,6 @@ enum ArchiveSettingsStore {
     defaults.set(url, forKey: Key.httpHookURL)
     persistHTTPHookHeaders(headers, to: defaults)
     defaults.set(payload.rawValue, forKey: Key.httpHookPayload)
-    defaults.set(true, forKey: Key.httpHookHeadersSeeded)
   }
 }
 

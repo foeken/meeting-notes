@@ -10,12 +10,8 @@ enum VocabularySettingsStore {
   private static let key = "recognition.customVocabulary"
   static let maximumEntries = 256
 
-  private static func loadDraft(from defaults: UserDefaults = .standard) -> String {
-    defaults.string(forKey: key) ?? ""
-  }
-
   static func load(from defaults: UserDefaults = .standard) -> [VocabularyEntry] {
-    parse(loadDraft(from: defaults))
+    parse(defaults.string(forKey: key) ?? "")
   }
 
   static func save(_ entries: [VocabularyEntry], to defaults: UserDefaults = .standard) {

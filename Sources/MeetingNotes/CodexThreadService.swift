@@ -129,31 +129,6 @@ struct CodexModelChoice: Identifiable, Equatable, Sendable {
   let reasoningEfforts: [String]
 }
 
-/// Tracks whether Option is held so a view can offer an alternate action.
-/// The popover does not receive key events while it is open, so this observes
-/// the modifier flags directly.
-@MainActor
-@Observable
-final class OptionKeyMonitor {
-  private(set) var isPressed = NSEvent.modifierFlags.contains(.option)
-  @ObservationIgnored private var monitor: Any?
-
-  func start() {
-    guard monitor == nil else { return }
-    isPressed = NSEvent.modifierFlags.contains(.option)
-    monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-      MainActor.assumeIsolated { self?.isPressed = event.modifierFlags.contains(.option) }
-      return event
-    }
-  }
-
-  func stop() {
-    if let monitor { NSEvent.removeMonitor(monitor) }
-    monitor = nil
-    isPressed = false
-  }
-}
-
 enum CodexThreadService {
   static let defaultPromptTemplate = """
     We are going to discuss the meeting “{{meeting_title}}”.
@@ -298,16 +273,20 @@ enum CodexThreadService {
     return params
   }
 
-  /// Asks the local app-server which models it offers, so Settings can show
-  /// real choices instead of a hardcoded list that drifts out of date.
-  static func availableModels() async throws -> [CodexModelChoice] {
+  /// Every app-server exchange shares the same shape: spawn the bundled
+  /// `codex app-server`, run the initialize handshake under one deadline, then
+  /// perform the call-specific requests. `body` runs on a background queue;
+  /// request ids from 2 upward are free for it to use.
+  private static func withConnection<T: Sendable>(
+    timeout: TimeInterval,
+    _ body: @escaping @Sendable (CodexRPCConnection) throws -> T
+  ) async throws -> T {
     guard let executable = executableURL() else { throw ServiceError.appNotInstalled }
-    return try await withCheckedThrowingContinuation {
-      (continuation: CheckedContinuation<[CodexModelChoice], Error>) in
-      DispatchQueue.global(qos: .userInitiated).async {
+    return try await withCheckedThrowingContinuation { continuation in
+      DispatchQueue.global(qos: .utility).async {
         do {
           let connection = try CodexRPCConnection(executable: executable)
-          connection.startDeadline(seconds: 20)
+          connection.startDeadline(seconds: timeout)
           defer { connection.cancelDeadline() }
           try connection.sendRequest(
             id: 1,
@@ -321,26 +300,49 @@ enum CodexThreadService {
             ])
           _ = try connection.response(id: 1)
           try connection.sendNotification(method: "initialized", params: [:])
-          try connection.sendRequest(id: 2, method: "model/list", params: [:])
-          let response = try connection.response(id: 2)
-          let result = response["result"] as? [String: Any]
-          let raw = (result?["models"] as? [[String: Any]])
-            ?? (result?["data"] as? [[String: Any]]) ?? []
-          let models = raw.compactMap { entry -> CodexModelChoice? in
-            guard let id = entry["id"] as? String, !id.isEmpty,
-              entry["hidden"] as? Bool != true
-            else { return nil }
-            let efforts = (entry["supportedReasoningEfforts"] as? [[String: Any]] ?? [])
-              .compactMap { $0["reasoningEffort"] as? String }
-            return CodexModelChoice(
-              id: id,
-              displayName: entry["displayName"] as? String ?? id,
-              reasoningEfforts: efforts)
-          }
-          continuation.resume(returning: models)
+          continuation.resume(returning: try body(connection))
         } catch {
           continuation.resume(throwing: error)
         }
+      }
+    }
+  }
+
+  /// Starts a turn and returns its id, the piece every turn-based call needs.
+  private static func startTurn(
+    _ connection: CodexRPCConnection, id: Int, threadID: String, input: [[String: Any]]
+  ) throws -> String {
+    try connection.sendRequest(
+      id: id,
+      method: "turn/start",
+      params: ["threadId": threadID, "input": input])
+    let response = try connection.response(id: id)
+    guard let result = response["result"] as? [String: Any],
+      let turn = result["turn"] as? [String: Any],
+      let turnID = turn["id"] as? String,
+      !turnID.isEmpty
+    else { throw ServiceError.protocolError("Codex returned no turn ID.") }
+    return turnID
+  }
+
+  /// Asks the local app-server which models it offers, so Settings can show
+  /// real choices instead of a hardcoded list that drifts out of date.
+  static func availableModels() async throws -> [CodexModelChoice] {
+    return try await withConnection(timeout: 20) { connection in
+      try connection.sendRequest(id: 2, method: "model/list", params: [:])
+      let response = try connection.response(id: 2)
+      let result = response["result"] as? [String: Any]
+      let raw = result?["models"] as? [[String: Any]] ?? []
+      return raw.compactMap { entry -> CodexModelChoice? in
+        guard let id = entry["id"] as? String, !id.isEmpty,
+          entry["hidden"] as? Bool != true
+        else { return nil }
+        let efforts = (entry["supportedReasoningEfforts"] as? [[String: Any]] ?? [])
+          .compactMap { $0["reasoningEffort"] as? String }
+        return CodexModelChoice(
+          id: id,
+          displayName: entry["displayName"] as? String ?? id,
+          reasoningEfforts: efforts)
       }
     }
   }
@@ -393,74 +395,40 @@ enum CodexThreadService {
     guard FileManager.default.fileExists(
       atPath: context.projectFolder.path, isDirectory: &isDirectory), isDirectory.boolValue
     else { throw ServiceError.projectFolderUnavailable }
-    guard let executable = executableURL() else { throw ServiceError.appNotInstalled }
+    // The dictionaries are built inside the closure: [String: Any] is not
+    // Sendable, while `context` and the plain strings are.
+    let template = promptTemplate
+    return try await withConnection(timeout: 30) { connection in
+      try connection.sendRequest(
+        id: 2,
+        method: "thread/start",
+        params: threadStartParams(for: context, model: model, reasoningEffort: reasoningEffort))
+      let startResponse = try connection.response(id: 2)
+      guard let result = startResponse["result"] as? [String: Any],
+        let thread = result["thread"] as? [String: Any],
+        let threadID = thread["id"] as? String,
+        !threadID.isEmpty
+      else { throw ServiceError.protocolError("Codex returned no task ID.") }
 
-    return try await withCheckedThrowingContinuation { continuation in
-      DispatchQueue.global(qos: .userInitiated).async {
-        do {
-          let connection = try CodexRPCConnection(executable: executable)
-          // One deadline covers the whole createThread RPC exchange so a
-          // silent app-server can never leak this continuation or block the UI.
-          connection.startDeadline(seconds: 30)
-          defer { connection.cancelDeadline() }
-          try connection.sendRequest(
-            id: 1,
-            method: "initialize",
-            params: [
-              "clientInfo": [
-                "name": "meeting-notes",
-                "title": "Meeting Notes",
-                "version": "1",
-              ]
-            ])
-          _ = try connection.response(id: 1)
-          try connection.sendNotification(method: "initialized", params: [:])
+      try connection.sendRequest(
+        id: 3,
+        method: "thread/name/set",
+        params: ["threadId": threadID, "name": threadTitle(for: context)])
+      _ = try connection.response(id: 3)
 
-          try connection.sendRequest(
-            id: 2,
-            method: "thread/start",
-            params: threadStartParams(
-              for: context, model: model, reasoningEffort: reasoningEffort))
-          let startResponse = try connection.response(id: 2)
-          guard let result = startResponse["result"] as? [String: Any],
-            let thread = result["thread"] as? [String: Any],
-            let threadID = thread["id"] as? String,
-            !threadID.isEmpty
-          else { throw ServiceError.protocolError("Codex returned no task ID.") }
-
-          try connection.sendRequest(
-            id: 3,
-            method: "thread/name/set",
-            params: ["threadId": threadID, "name": threadTitle(for: context)])
-          _ = try connection.response(id: 3)
-
-          // Persist the meeting context as a normal visible user message, then
-          // interrupt before model generation. The user's first real message
-          // will process this preloaded context once.
-          try connection.sendRequest(
-            id: 4,
-            method: "turn/start",
-            params: [
-              "threadId": threadID,
-              "input": [turnInput(for: context, promptTemplate: promptTemplate)],
-            ])
-          let turnResponse = try connection.response(id: 4)
-          guard let turnResult = turnResponse["result"] as? [String: Any],
-            let turn = turnResult["turn"] as? [String: Any],
-            let turnID = turn["id"] as? String,
-            !turnID.isEmpty
-          else { throw ServiceError.protocolError("Codex returned no turn ID.") }
-          try connection.waitUntilUserMessageStarts(threadID: threadID)
-          try connection.sendRequest(
-            id: 5,
-            method: "turn/interrupt",
-            params: ["threadId": threadID, "turnId": turnID])
-          _ = try connection.response(id: 5)
-          continuation.resume(returning: threadID)
-        } catch {
-          continuation.resume(throwing: error)
-        }
-      }
+      // Persist the meeting context as a normal visible user message, then
+      // interrupt before model generation. The user's first real message
+      // will process this preloaded context once.
+      let turnID = try startTurn(
+        connection, id: 4, threadID: threadID,
+        input: [turnInput(for: context, promptTemplate: template)])
+      try connection.waitUntilUserMessageStarts(threadID: threadID)
+      try connection.sendRequest(
+        id: 5,
+        method: "turn/interrupt",
+        params: ["threadId": threadID, "turnId": turnID])
+      _ = try connection.response(id: 5)
+      return threadID
     }
   }
 
@@ -474,53 +442,14 @@ enum CodexThreadService {
   static func sendMessage(
     _ message: String, toThread threadID: String, timeout: TimeInterval = 900
   ) async throws {
-    guard let executable = executableURL() else { throw ServiceError.appNotInstalled }
-
-    try await withCheckedThrowingContinuation {
-      (continuation: CheckedContinuation<Void, Error>) in
-      DispatchQueue.global(qos: .utility).async {
-        do {
-          let connection = try CodexRPCConnection(executable: executable)
-          connection.startDeadline(seconds: timeout)
-          defer { connection.cancelDeadline() }
-          try connection.sendRequest(
-            id: 1,
-            method: "initialize",
-            params: [
-              "clientInfo": [
-                "name": "meeting-notes",
-                "title": "Meeting Notes",
-                "version": "1",
-              ]
-            ])
-          _ = try connection.response(id: 1)
-          try connection.sendNotification(method: "initialized", params: [:])
-
-          try connection.sendRequest(
-            id: 2,
-            method: "thread/resume",
-            params: ["threadId": threadID])
-          _ = try connection.response(id: 2)
-
-          try connection.sendRequest(
-            id: 3,
-            method: "turn/start",
-            params: [
-              "threadId": threadID,
-              "input": [["type": "text", "text": message]],
-            ])
-          let turnResponse = try connection.response(id: 3)
-          guard let turnResult = turnResponse["result"] as? [String: Any],
-            let turn = turnResult["turn"] as? [String: Any],
-            let turnID = turn["id"] as? String,
-            !turnID.isEmpty
-          else { throw ServiceError.protocolError("Codex returned no turn ID.") }
-          try connection.waitUntilTurnFinishes(threadID: threadID, turnID: turnID)
-          continuation.resume()
-        } catch {
-          continuation.resume(throwing: error)
-        }
-      }
+    try await withConnection(timeout: timeout) { connection in
+      try connection.sendRequest(
+        id: 2, method: "thread/resume", params: ["threadId": threadID])
+      _ = try connection.response(id: 2)
+      let turnID = try startTurn(
+        connection, id: 3, threadID: threadID,
+        input: [["type": "text", "text": message]])
+      try connection.waitUntilTurnFinishes(threadID: threadID, turnID: turnID)
     }
   }
 
@@ -561,53 +490,15 @@ enum CodexThreadService {
   static func askForSummaryContext(
     threadID: String, timeout: TimeInterval = 240
   ) async throws -> String? {
-    guard let executable = executableURL() else { throw ServiceError.appNotInstalled }
-
-    return try await withCheckedThrowingContinuation {
-      (continuation: CheckedContinuation<String?, Error>) in
-      DispatchQueue.global(qos: .utility).async {
-        do {
-          let connection = try CodexRPCConnection(executable: executable)
-          connection.startDeadline(seconds: timeout)
-          defer { connection.cancelDeadline() }
-          try connection.sendRequest(
-            id: 1,
-            method: "initialize",
-            params: [
-              "clientInfo": [
-                "name": "meeting-notes",
-                "title": "Meeting Notes",
-                "version": "1",
-              ]
-            ])
-          _ = try connection.response(id: 1)
-          try connection.sendNotification(method: "initialized", params: [:])
-
-          try connection.sendRequest(
-            id: 2,
-            method: "thread/resume",
-            params: ["threadId": threadID])
-          _ = try connection.response(id: 2)
-
-          try connection.sendRequest(
-            id: 3,
-            method: "turn/start",
-            params: [
-              "threadId": threadID,
-              "input": [["type": "text", "text": summaryContextPrompt]],
-            ])
-          let turnResponse = try connection.response(id: 3)
-          guard let turnResult = turnResponse["result"] as? [String: Any],
-            let turn = turnResult["turn"] as? [String: Any],
-            let turnID = turn["id"] as? String,
-            !turnID.isEmpty
-          else { throw ServiceError.protocolError("Codex returned no turn ID.") }
-          let reply = try connection.collectAgentText(threadID: threadID, turnID: turnID)
-          continuation.resume(returning: normalizedSummaryContext(reply))
-        } catch {
-          continuation.resume(throwing: error)
-        }
-      }
+    return try await withConnection(timeout: timeout) { connection in
+      try connection.sendRequest(
+        id: 2, method: "thread/resume", params: ["threadId": threadID])
+      _ = try connection.response(id: 2)
+      let turnID = try startTurn(
+        connection, id: 3, threadID: threadID,
+        input: [["type": "text", "text": summaryContextPrompt]])
+      let reply = try connection.collectAgentText(threadID: threadID, turnID: turnID)
+      return normalizedSummaryContext(reply)
     }
   }
 
