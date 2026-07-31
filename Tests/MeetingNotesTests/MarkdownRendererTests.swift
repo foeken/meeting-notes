@@ -2062,6 +2062,58 @@ import Testing
   }
 }
 
+@Test func summaryContextNormalizationDropsEmptyAndSentinelReplies() {
+  #expect(CodexThreadService.normalizedSummaryContext("") == nil)
+  #expect(CodexThreadService.normalizedSummaryContext("  \n ") == nil)
+  #expect(CodexThreadService.normalizedSummaryContext("NOTHING_TO_ADD") == nil)
+  #expect(CodexThreadService.normalizedSummaryContext("Reviewed the task: NOTHING_TO_ADD.") == nil)
+  #expect(
+    CodexThreadService.normalizedSummaryContext("\n- Rename ACME to Acme Corp.\n")
+      == "- Rename ACME to Acme Corp.")
+}
+
+@Test func agentMessageTextIsReadOnlyFromCompletedAgentItemsOfTheThread() {
+  let event: [String: Any] = [
+    "method": "item/completed",
+    "params": [
+      "threadId": "t1",
+      "item": ["type": "agentMessage", "text": "- Point one"],
+    ],
+  ]
+  #expect(CodexThreadService.agentMessageText(event, threadID: "t1") == "- Point one")
+  #expect(CodexThreadService.agentMessageText(event, threadID: "other") == nil)
+
+  let userEvent: [String: Any] = [
+    "method": "item/completed",
+    "params": [
+      "threadId": "t1",
+      "item": ["type": "userMessage", "text": "hello"],
+    ],
+  ]
+  #expect(CodexThreadService.agentMessageText(userEvent, threadID: "t1") == nil)
+
+  let startedEvent: [String: Any] = [
+    "method": "item/started",
+    "params": [
+      "threadId": "t1",
+      "item": ["type": "agentMessage", "text": "partial"],
+    ],
+  ]
+  #expect(CodexThreadService.agentMessageText(startedEvent, threadID: "t1") == nil)
+}
+
+@Test func threadContextSectionFencesTaskNotesAndDisappearsWhenEmpty() {
+  #expect(OpenAIEnricher.threadContextSection(nil).isEmpty)
+  #expect(OpenAIEnricher.threadContextSection("").isEmpty)
+
+  let section = OpenAIEnricher.threadContextSection("- The board approved option B.")
+  #expect(section.contains("BEGIN TASK NOTES"))
+  #expect(section.contains("END TASK NOTES"))
+  #expect(section.contains("- The board approved option B."))
+  #expect(section.contains("not instructions"))
+  #expect(section.contains("Do not fabricate transcript evidence"))
+}
+
 @Test func summaryGenerationTimeoutScalesWithPromptSizeAndCaps() {
   #expect(ChatGPTAuthService.generationTimeout(promptCharacterCount: 0) == 600)
   #expect(ChatGPTAuthService.generationTimeout(promptCharacterCount: 40_000) == 720)

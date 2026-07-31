@@ -524,13 +524,100 @@ enum CodexThreadService {
     }
   }
 
+  /// Asked of a meeting's task right before the structured notes are written.
+  /// The sentinel reply lets an empty result be recognized without parsing.
+  static let summaryContextPrompt = """
+    The app is about to generate the final structured notes for this meeting \
+    from the word-for-word transcript. Review this task's discussion and reply \
+    with only the points that should shape those notes: corrections, \
+    decisions, context, follow-ups, or emphasis that the transcript alone \
+    would miss or get wrong. Be concise and factual, one bullet per point. Do \
+    not summarize the whole meeting. If this task contains nothing the notes \
+    should reflect, reply with exactly NOTHING_TO_ADD.
+    """
+
+  /// Trims a task reply and drops the nothing-to-add sentinel, so callers see
+  /// either usable notes or nil.
+  static func normalizedSummaryContext(_ reply: String) -> String? {
+    let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, !trimmed.contains("NOTHING_TO_ADD") else { return nil }
+    return trimmed
+  }
+
+  /// The text of a finished assistant message in the given thread, when the
+  /// event carries one.
+  static func agentMessageText(_ object: [String: Any], threadID: String) -> String? {
+    guard object["method"] as? String == "item/completed",
+      let params = object["params"] as? [String: Any],
+      params["threadId"] as? String == threadID,
+      let item = params["item"] as? [String: Any],
+      item["type"] as? String == "agentMessage"
+    else { return nil }
+    return item["text"] as? String
+  }
+
+  /// Runs one turn in the meeting's task asking which discussion points should
+  /// influence the notes. Returns nil when the task has nothing to add.
+  static func askForSummaryContext(
+    threadID: String, timeout: TimeInterval = 240
+  ) async throws -> String? {
+    guard let executable = executableURL() else { throw ServiceError.appNotInstalled }
+
+    return try await withCheckedThrowingContinuation {
+      (continuation: CheckedContinuation<String?, Error>) in
+      DispatchQueue.global(qos: .utility).async {
+        do {
+          let connection = try CodexRPCConnection(executable: executable)
+          connection.startDeadline(seconds: timeout)
+          defer { connection.cancelDeadline() }
+          try connection.sendRequest(
+            id: 1,
+            method: "initialize",
+            params: [
+              "clientInfo": [
+                "name": "meeting-notes",
+                "title": "Meeting Notes",
+                "version": "1",
+              ]
+            ])
+          _ = try connection.response(id: 1)
+          try connection.sendNotification(method: "initialized", params: [:])
+
+          try connection.sendRequest(
+            id: 2,
+            method: "thread/resume",
+            params: ["threadId": threadID])
+          _ = try connection.response(id: 2)
+
+          try connection.sendRequest(
+            id: 3,
+            method: "turn/start",
+            params: [
+              "threadId": threadID,
+              "input": [["type": "text", "text": summaryContextPrompt]],
+            ])
+          let turnResponse = try connection.response(id: 3)
+          guard let turnResult = turnResponse["result"] as? [String: Any],
+            let turn = turnResult["turn"] as? [String: Any],
+            let turnID = turn["id"] as? String,
+            !turnID.isEmpty
+          else { throw ServiceError.protocolError("Codex returned no turn ID.") }
+          let reply = try connection.collectAgentText(threadID: threadID, turnID: turnID)
+          continuation.resume(returning: normalizedSummaryContext(reply))
+        } catch {
+          continuation.resume(throwing: error)
+        }
+      }
+    }
+  }
+
 }
 
 private final class CodexRPCConnection {
   /// Only notification methods the waiters match on are worth buffering;
   /// everything else (deltas, token counts, …) is dropped.
   private static let bufferedNotificationMethods: Set<String> = [
-    "item/started", "turn/completed", "turn/failed",
+    "item/started", "item/completed", "turn/completed", "turn/failed",
   ]
   private static let maxBufferedNotifications = 64
 
@@ -654,6 +741,32 @@ private final class CodexRPCConnection {
         object, threadID: threadID, turnID: turnID)
       {
         return try outcome.get()
+      }
+    }
+    if hasTimedOut { throw CodexThreadService.ServiceError.timedOut }
+    throw CodexThreadService.ServiceError.processExited("")
+  }
+
+  /// Waits for the turn to finish while collecting assistant message text, so
+  /// a caller can read the reply of the turn it started.
+  func collectAgentText(threadID: String, turnID: String) throws -> String {
+    var collected: [String] = []
+    for object in pendingNotifications {
+      if let text = CodexThreadService.agentMessageText(object, threadID: threadID) {
+        collected.append(text)
+      }
+    }
+    while process.isRunning {
+      let object = try nextNotificationObject()
+      if let text = CodexThreadService.agentMessageText(object, threadID: threadID) {
+        collected.append(text)
+        continue
+      }
+      if let outcome = CodexThreadService.turnOutcome(
+        object, threadID: threadID, turnID: turnID)
+      {
+        try outcome.get()
+        return collected.joined(separator: "\n\n")
       }
     }
     if hasTimedOut { throw CodexThreadService.ServiceError.timedOut }
