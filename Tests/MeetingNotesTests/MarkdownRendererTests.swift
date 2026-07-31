@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @Test func meetingSummaryGuidancePreservesSubstantiveContext() {
-  #expect(OpenAIEnricher.defaultSummaryGuidance.contains("250–400 words"))
+  #expect(OpenAIEnricher.defaultSummaryGuidance.contains("250–400 words per half hour"))
   #expect(OpenAIEnricher.defaultSummaryGuidance.contains("every major topic"))
   #expect(OpenAIEnricher.defaultSummaryGuidance.contains("disagreement"))
   #expect(!OpenAIEnricher.defaultSummaryGuidance.localizedLowercase.contains("concise"))

@@ -10,7 +10,7 @@ actor OpenAIEnricher {
   }
   static let transcriptChunkCharacterLimit = 80_000
   nonisolated static let defaultSummaryGuidance = """
-    Write a substantive executive summary covering every major topic, decision, rationale, disagreement, and next step. For meetings over 30 minutes, target roughly 250–400 words; shorter meetings may use less. Avoid unnecessary repetition, but do not sacrifice important context for brevity.
+    Write a substantive executive summary covering every major topic, decision, rationale, disagreement, and next step. Scale the length to the meeting: as a rule of thumb, roughly 250–400 words per half hour of discussion, so a long meeting gets a proportionally longer summary. A short or sparse meeting may use less. Avoid unnecessary repetition and padding, but never sacrifice important context for brevity.
     """
   /// Read per request so a settings change applies without restarting.
   private var summaryGuidance: String { SummarySettingsStore.loadGuidance() }
