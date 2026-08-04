@@ -1102,7 +1102,11 @@ final class AppModel {
       reportError("Could not locate the meeting inside the local archive.")
       return
     }
-    await remoteSync.flush()
+    // Codex reads the meeting files from the *local* archive, so thread
+    // creation must not wait for the remote leg: with the remote host
+    // unreachable a blocking flush eats SSH timeouts for every queued folder
+    // and the Discuss button spins for minutes. Sync catches up on its own.
+    Task { await remoteSync.flush() }
     statusText = hadTask ? "Starting a new Codex task…" : "Creating Codex task…"
     do {
       let threadID = try await CodexThreadService.createThread(
@@ -1119,7 +1123,6 @@ final class AppModel {
         hadTask
           ? "New Codex task created; the earlier one is no longer linked"
           : "Codex task created for this meeting")
-      await remoteSync.flush()
       showCodexProjectHintIfNeeded(projectFolder: context.projectFolder)
     } catch {
       reportError("Could not create the Codex task: \(error.localizedDescription)")
