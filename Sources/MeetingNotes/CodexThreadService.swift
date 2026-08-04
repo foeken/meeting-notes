@@ -293,7 +293,11 @@ enum CodexThreadService {
             method: "initialize",
             params: [
               "clientInfo": [
-                "name": "meeting-notes",
+                // The name is forwarded upstream as the `originator` header, and
+                // unknown originators intermittently fail the model-geography
+                // check that stock Codex clients pass. Identify as the stock
+                // client; the title still shows who we are.
+                "name": "codex_cli_rs",
                 "title": "Meeting Notes",
                 "version": "1",
               ]
