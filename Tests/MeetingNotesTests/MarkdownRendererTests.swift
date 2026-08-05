@@ -10,6 +10,41 @@ import Testing
 
 @testable import MeetingNotes
 
+@Test func openAITranscriberChunksAtSampleBoundaries() {
+  #expect(OpenAITranscriber.chunkRanges(totalSamples: 0).isEmpty)
+  let single = OpenAITranscriber.chunkRanges(totalSamples: 100, chunkSamples: 1_000)
+  #expect(single == [OpenAITranscriber.ChunkRange(offset: 0, count: 100)])
+  let split = OpenAITranscriber.chunkRanges(totalSamples: 2_500, chunkSamples: 1_000)
+  #expect(split == [
+    OpenAITranscriber.ChunkRange(offset: 0, count: 1_000),
+    OpenAITranscriber.ChunkRange(offset: 1_000, count: 1_000),
+    OpenAITranscriber.ChunkRange(offset: 2_000, count: 500),
+  ])
+}
+
+@Test func openAITranscriberSanitizesKeywords() {
+  #expect(OpenAITranscriber.sanitizedKeyword("Nedap") == "Nedap")
+  #expect(OpenAITranscriber.sanitizedKeyword("<Nedap>\r\nOns Suite") == "NedapOns Suite")
+  #expect(OpenAITranscriber.sanitizedKeyword("  spaced  ") == "spaced")
+}
+
+@Test func openAITranscriberBuildsMultipartBody() {
+  let body = OpenAITranscriber.multipartBody(
+    boundary: "b", model: "gpt-transcribe", prompt: "hint", fileData: Data([1, 2]))
+  let text = String(decoding: body, as: UTF8.self)
+  #expect(text.contains("name=\"model\"\r\n\r\ngpt-transcribe"))
+  #expect(text.contains("name=\"prompt\"\r\n\r\nhint"))
+  #expect(text.contains("filename=\"audio.wav\""))
+  #expect(text.hasSuffix("\r\n--b--\r\n"))
+}
+
+@Test func transcriptionEngineSettingRoundTrips() {
+  let defaults = UserDefaults(suiteName: "engine-test-\(UUID().uuidString)")!
+  #expect(TranscriptionEngineSettingsStore.load(from: defaults) == .onDevice)
+  TranscriptionEngineSettingsStore.save(.openAI, to: defaults)
+  #expect(TranscriptionEngineSettingsStore.load(from: defaults) == .openAI)
+}
+
 @Test func fillerWordFilterRemovesPausesWithoutDamagingWords() {
   #expect(FillerWordFilter.apply("So uh I was thinking um about this") == "So I was thinking about this")
   #expect(FillerWordFilter.apply("Uh, um, the answer is yes") == "The answer is yes")

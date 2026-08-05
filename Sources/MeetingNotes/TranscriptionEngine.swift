@@ -240,6 +240,7 @@ actor LiveTranscriptionEngine {
 
   private struct StreamState {
     var manager: StreamingNemotronMultilingualAsrManager?
+    var openAISession: OpenAILiveSession?
     var sampleCount = 0
     var wavPosition: Int?
     var emittedThrough: TimeInterval = 0
@@ -254,6 +255,7 @@ actor LiveTranscriptionEngine {
   private var onTurn: TurnHandler?
   private var running = false
   private var sessionID: UUID?
+  private var openAIKey: String?
 
   init(transcriber: NemotronTranscriber) {
     self.transcriber = transcriber
@@ -265,6 +267,8 @@ actor LiveTranscriptionEngine {
     states = [.microphone: StreamState(), .system: StreamState()]
     self.onTurn = onTurn
     self.sessionID = sessionID
+    openAIKey = TranscriptionEngineSettingsStore.load() == .openAI
+      ? OpenAITranscribeKeychainStore.load() : nil
     running = true
     return sessionID
   }
@@ -278,12 +282,57 @@ actor LiveTranscriptionEngine {
     wavPosition: Int? = nil
   ) async {
     guard running, self.sessionID == sessionID, !samples.isEmpty else { return }
+    if let openAIKey {
+      appendToOpenAI(samples, source: source, apiKey: openAIKey, wavPosition: wavPosition)
+      return
+    }
     var state = states[source, default: StreamState()]
     let shouldDrain = state.queue.enqueue(samples)
     if let wavPosition { state.wavPosition = wavPosition }
     states[source] = state
     guard shouldDrain else { return }
     await drain(source: source, sessionID: sessionID)
+  }
+
+  private func appendToOpenAI(
+    _ samples: [Int16], source: TranscriptTurn.Source, apiKey: String, wavPosition: Int?
+  ) {
+    var state = states[source, default: StreamState()]
+    state.sampleCount += samples.count
+    if let wavPosition { state.wavPosition = wavPosition }
+    if state.openAISession == nil {
+      let sessionID = self.sessionID
+      state.openAISession = OpenAILiveSession(apiKey: apiKey) { [weak self] transcript in
+        Task {
+          guard let self, let sessionID else { return }
+          await self.emitOpenAITranscript(transcript, source: source, sessionID: sessionID)
+        }
+      }
+    }
+    state.openAISession?.append(samples)
+    states[source] = state
+  }
+
+  private func emitOpenAITranscript(
+    _ transcript: String, source: TranscriptTurn.Source, sessionID: UUID
+  ) async {
+    guard running, self.sessionID == sessionID else { return }
+    var state = states[source, default: StreamState()]
+    let end = Double(state.wavPosition ?? state.sampleCount) / 16_000
+    let rawText = VocabularyTextCorrector.apply(
+      to: transcript.trimmingCharacters(in: .whitespacesAndNewlines))
+    let text = FillerWordSettingsStore.load() ? FillerWordFilter.apply(rawText) : rawText
+    guard !text.isEmpty else {
+      state.emittedThrough = end
+      states[source] = state
+      return
+    }
+    let turn = TranscriptTurn(
+      start: min(state.emittedThrough, end), end: end,
+      speaker: "Unknown", text: text, source: source)
+    state.emittedThrough = end
+    states[source] = state
+    await onTurn?(turn)
   }
 
   private func drain(source: TranscriptTurn.Source, sessionID: UUID) async {
@@ -332,9 +381,12 @@ actor LiveTranscriptionEngine {
   func finish() {
     running = false
     sessionID = nil
+    openAIKey = nil
     for source in [TranscriptTurn.Source.microphone, .system] {
       states[source, default: StreamState()].queue.cancel()
       states[source, default: StreamState()].manager = nil
+      states[source, default: StreamState()].openAISession?.close()
+      states[source, default: StreamState()].openAISession = nil
     }
     onTurn = nil
   }
@@ -376,6 +428,15 @@ actor FinalTranscriptionEngine {
   }
 
   func process(microphone: URL, system: URL) async throws -> [TranscriptTurn] {
+    if TranscriptionEngineSettingsStore.load() == .openAI,
+      let apiKey = OpenAITranscribeKeychainStore.load(), !apiKey.isEmpty {
+      do {
+        return try await processWithOpenAI(microphone: microphone, system: system, apiKey: apiKey)
+      } catch {
+        // The WAVs stay on disk; a failed API call must never lose a meeting.
+        // Fall back to on-device transcription.
+      }
+    }
     let mic = try await transcribeIfUsable(microphone)
     let remote = try await transcribeIfUsable(system)
 
@@ -383,6 +444,27 @@ actor FinalTranscriptionEngine {
     let micTurns = mic.map { Self.turns(from: $0, source: .microphone) } ?? []
     let remoteTurns = remote.map { Self.turns(from: $0, source: .system) } ?? []
     let mergedTurns = (micTurns + remoteTurns).sorted { $0.start < $1.start }
+    return FillerWordSettingsStore.load()
+      ? FillerWordFilter.apply(to: mergedTurns)
+      : mergedTurns
+  }
+
+  private func processWithOpenAI(
+    microphone: URL, system: URL, apiKey: String
+  ) async throws -> [TranscriptTurn] {
+    var turns: [TranscriptTurn] = []
+    for (url, source) in [(microphone, TranscriptTurn.Source.microphone), (system, .system)]
+    where Self.hasUsableAudio(url) {
+      let pieces = try await OpenAITranscriber.transcribe(url: url, apiKey: apiKey)
+      turns += pieces.map { piece in
+        TranscriptTurn(
+          start: piece.start, end: piece.end,
+          speaker: "Unknown",
+          text: VocabularyTextCorrector.apply(to: piece.text), source: source)
+      }
+    }
+    guard !turns.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
+    let mergedTurns = turns.sorted { $0.start < $1.start }
     return FillerWordSettingsStore.load()
       ? FillerWordFilter.apply(to: mergedTurns)
       : mergedTurns

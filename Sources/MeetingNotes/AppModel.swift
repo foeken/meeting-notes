@@ -68,6 +68,8 @@ final class AppModel {
   var detectedMeetingApp: String?
   var removeFillerWords = FillerWordSettingsStore.load()
   var meetingNotesLanguage = MeetingNotesLanguageStore.load()
+  var transcriptionEngine = TranscriptionEngineSettingsStore.load()
+  var openAITranscribeKeyDraft = OpenAITranscribeKeychainStore.load() ?? ""
   var ignoredMeetingTitlesDraft = IgnoredMeetingTitlesStore.load().joined(separator: ", ")
   var updateChannel = UpdateChannelSettingsStore.load()
   var automaticTranscriptDeletionEnabled = true
@@ -367,6 +369,21 @@ final class AppModel {
     removeFillerWords = enabled
     FillerWordSettingsStore.save(enabled)
     vocabularyStatusText = enabled ? "Filler word removal enabled" : "Filler word removal disabled"
+  }
+
+  func setTranscriptionEngine(_ engine: TranscriptionEngineOption) {
+    guard transcriptionEngine != engine else { return }
+    transcriptionEngine = engine
+    TranscriptionEngineSettingsStore.save(engine)
+    showTransientStatus(
+      engine == .openAI
+        ? "Transcription uses the OpenAI API"
+        : "Transcription runs on this Mac")
+  }
+
+  func saveOpenAITranscribeKey() {
+    OpenAITranscribeKeychainStore.save(
+      openAITranscribeKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines))
   }
 
   func setMeetingNotesLanguage(_ language: MeetingNotesLanguage) {

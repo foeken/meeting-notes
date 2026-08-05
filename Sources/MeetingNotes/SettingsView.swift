@@ -994,6 +994,52 @@ private struct TranscriptionsSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
+            Text("Transcription engine")
+              .font(.body.weight(.medium))
+            Text(
+              model.transcriptionEngine == .openAI
+                ? "Audio is sent to OpenAI for transcription."
+                : "Audio never leaves this Mac."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          }
+          Spacer()
+          Picker("Transcription engine", selection: Binding(
+            get: { model.transcriptionEngine },
+            set: { model.setTranscriptionEngine($0) }
+          )) {
+            ForEach(TranscriptionEngineOption.allCases, id: \.self) { option in
+              Text(option.label).tag(option)
+            }
+          }
+          .labelsHidden()
+          .fixedSize()
+        }
+
+        if model.transcriptionEngine == .openAI {
+          HStack(spacing: 16) {
+            Text("API key")
+              .font(.body.weight(.medium))
+            SecureField("sk-...", text: Binding(
+              get: { model.openAITranscribeKeyDraft },
+              set: { model.openAITranscribeKeyDraft = $0 }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .onChange(of: model.openAITranscribeKeyDraft) { model.saveOpenAITranscribeKey() }
+          }
+          Label(
+            "The key is stored in the Keychain. If a transcription request fails, the app falls back to on-device transcription.",
+            systemImage: "key"
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+
+        Divider()
+
+        HStack(spacing: 16) {
+          VStack(alignment: .leading, spacing: 4) {
             Text("Remove filler words")
               .font(.body.weight(.medium))
             Text("Remove uh, um, er, hmm, and similar verbal pauses from transcripts.")
