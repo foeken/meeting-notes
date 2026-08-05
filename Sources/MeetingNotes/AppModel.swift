@@ -70,6 +70,7 @@ final class AppModel {
   var meetingNotesLanguage = MeetingNotesLanguageStore.load()
   var transcriptionEngine = TranscriptionEngineSettingsStore.load()
   var openAITranscribeKeyDraft = OpenAITranscribeKeychainStore.load() ?? ""
+  var openAITranscribeKeyTestState = OpenAIKeyTestState.idle
   var ignoredMeetingTitlesDraft = IgnoredMeetingTitlesStore.load().joined(separator: ", ")
   var updateChannel = UpdateChannelSettingsStore.load()
   var automaticTranscriptDeletionEnabled = true
@@ -384,6 +385,23 @@ final class AppModel {
   func saveOpenAITranscribeKey() {
     OpenAITranscribeKeychainStore.save(
       openAITranscribeKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines))
+    openAITranscribeKeyTestState = .idle
+  }
+
+  func testOpenAITranscribeKey() {
+    let key = openAITranscribeKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !key.isEmpty else {
+      openAITranscribeKeyTestState = .failed("Enter an API key first")
+      return
+    }
+    openAITranscribeKeyTestState = .testing
+    Task { @MainActor in
+      if let message = await OpenAITranscriber.testKey(key) {
+        openAITranscribeKeyTestState = .failed(message)
+      } else {
+        openAITranscribeKeyTestState = .succeeded
+      }
+    }
   }
 
   func setMeetingNotesLanguage(_ language: MeetingNotesLanguage) {

@@ -1027,6 +1027,34 @@ private struct TranscriptionsSettingsPane: View {
             ))
             .textFieldStyle(.roundedBorder)
             .onChange(of: model.openAITranscribeKeyDraft) { model.saveOpenAITranscribeKey() }
+            switch model.openAITranscribeKeyTestState {
+            case .idle:
+              Button(action: model.testOpenAITranscribeKey) {
+                Image(systemName: "bolt.circle")
+              }
+              .buttonStyle(.plain)
+              .foregroundStyle(.secondary)
+              .help("Test the API key")
+            case .testing:
+              ProgressView()
+                .controlSize(.small)
+            case .succeeded:
+              Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .help("The API key works")
+            case .failed(let message):
+              Button(action: model.testOpenAITranscribeKey) {
+                Image(systemName: "exclamationmark.circle.fill")
+                  .foregroundStyle(.red)
+              }
+              .buttonStyle(.plain)
+              .help(message)
+            }
+          }
+          if case .failed(let message) = model.openAITranscribeKeyTestState {
+            Text(message)
+              .font(.caption)
+              .foregroundStyle(.red)
           }
           Label(
             "The key is stored in the Keychain. If a transcription request fails, the app falls back to on-device transcription.",

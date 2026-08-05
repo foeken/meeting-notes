@@ -12,6 +12,13 @@ enum TranscriptionEngineOption: String, CaseIterable, Sendable {
   }
 }
 
+enum OpenAIKeyTestState: Equatable, Sendable {
+  case idle
+  case testing
+  case succeeded
+  case failed(String)
+}
+
 enum TranscriptionEngineSettingsStore {
   private static let key = "transcription.engine"
 
@@ -71,6 +78,24 @@ enum OpenAITranscriber {
   static let realtimeURL = URL(string: "wss://api.openai.com/v1/realtime?intent=transcription")!
   /// 10 minutes of 16 kHz mono Int16 ≈ 19.2 MB, safely under the 25 MB upload cap.
   static let chunkSamples = 10 * 60 * 16_000
+
+  /// Verifies the key and model access in one request.
+  static func testKey(_ apiKey: String) async -> String? {
+    var request = URLRequest(
+      url: URL(string: "https://api.openai.com/v1/models/\(fileModel)")!)
+    request.timeoutInterval = 15
+    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    do {
+      let (data, response) = try await URLSession.shared.data(for: request)
+      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+      if status == 200 { return nil }
+      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      return ((json?["error"] as? [String: Any])?["message"] as? String)
+        ?? "HTTP \(status)"
+    } catch {
+      return error.localizedDescription
+    }
+  }
 
   struct Piece: Sendable, Equatable {
     let start: TimeInterval
