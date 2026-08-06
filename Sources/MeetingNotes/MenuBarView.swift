@@ -255,10 +255,24 @@ struct MenuBarView: View {
         Label("Live transcript", systemImage: "text.alignleft")
           .font(.caption.weight(.semibold))
         Spacer()
-        Text("LOCAL")
-          .font(.system(size: 9, weight: .bold))
-          .tracking(0.6)
-          .foregroundStyle(.secondary)
+        if model.liveUsingOpenAI {
+          Text("OPENAI")
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.6)
+            .foregroundStyle(.secondary)
+        } else {
+          Text("LOCAL")
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.6)
+            .foregroundStyle(.secondary)
+          if model.canUpgradeLivePreview {
+            Button("Upgrade") { model.upgradeLiveToOpenAI() }
+              .buttonStyle(.plain)
+              .font(.system(size: 9, weight: .bold))
+              .foregroundStyle(.tint)
+              .help("Use the OpenAI live engine for the rest of this meeting")
+          }
+        }
       }
       .padding(.horizontal, 11)
       .padding(.vertical, 9)
@@ -270,8 +284,6 @@ struct MenuBarView: View {
           Text(turn.start.meetingTimestamp)
             .font(.system(.caption2, design: .monospaced))
             .foregroundStyle(.tertiary)
-          Text(turn.speaker)
-            .font(.caption.weight(.semibold))
           Text(turn.text)
             .font(.caption)
             .foregroundStyle(.secondary)

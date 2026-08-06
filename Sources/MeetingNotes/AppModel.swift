@@ -25,6 +25,16 @@ final class AppModel {
   var title = ""
   var elapsed: TimeInterval = 0
   var recentTurns: [TranscriptTurn] = []
+  /// True while the running meeting's live preview uses the OpenAI realtime
+  /// API — either configured, or upgraded mid-meeting. Resets on stop.
+  var liveUsingOpenAI = false
+
+  /// The upgrade affordance only makes sense while recording, still on the
+  /// on-device preview, with a key available.
+  var canUpgradeLivePreview: Bool {
+    (state == .recording || state == .paused) && !liveUsingOpenAI
+      && !openAITranscribeKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty
+  }
   var statusText = "Ready" {
     didSet { statusSeverity = .info }
   }
@@ -403,6 +413,18 @@ final class AppModel {
       engine == .openAI
         ? "Live transcription uses the OpenAI API"
         : "Live transcription runs on this Mac")
+  }
+
+  /// One-off upgrade of the running meeting's preview to the OpenAI realtime
+  /// API. The persisted setting stays on-device, so the next meeting starts
+  /// back on the configured engine.
+  func upgradeLiveToOpenAI() {
+    guard state == .recording || state == .paused, !liveUsingOpenAI,
+      !(OpenAITranscribeKeychainStore.load() ?? "").isEmpty
+    else { return }
+    liveUsingOpenAI = true
+    Task { await live.upgradeToOpenAI() }
+    showTransientStatus("Live transcription upgraded for this meeting")
   }
 
   func saveOpenAITranscribeKey() {
@@ -1789,6 +1811,8 @@ final class AppModel {
           }
         }
       }
+      liveUsingOpenAI = TranscriptionEngineSettingsStore.loadLive() == .openAI
+        && !(OpenAITranscribeKeychainStore.load() ?? "").isEmpty
       // A single FIFO stream per capture keeps chunks in delivery order; one
       // unstructured Task per callback could reach the ASR actor out of order.
       let (liveFeed, liveFeedContinuation) = AsyncStream.makeStream(
@@ -1830,6 +1854,7 @@ final class AppModel {
       _ = try? await systemAudio.stop()
       stopLiveFeed()
       await live.finish()
+      liveUsingOpenAI = false
       captureClock.reset()
       recordingWakeLock.release()
       meetingAutoStopScheduler.cancel()
@@ -1951,6 +1976,7 @@ final class AppModel {
       else { throw CocoaError(.fileNoSuchFile) }
       stopLiveFeed()
       await live.finish()
+      liveUsingOpenAI = false
       let stoppedMeeting = try await store.prepareForFinalization()
       activeRecordingMeetingID = nil
       showPendingMeetingInList(stoppedMeeting.document)
