@@ -336,7 +336,8 @@ enum CodexThreadService {
       try connection.sendRequest(id: 2, method: "model/list", params: [:])
       let response = try connection.response(id: 2)
       let result = response["result"] as? [String: Any]
-      let raw = result?["models"] as? [[String: Any]] ?? []
+      // Newer app-servers return the list under "data"; older ones used "models".
+      let raw = (result?["data"] ?? result?["models"]) as? [[String: Any]] ?? []
       return raw.compactMap { entry -> CodexModelChoice? in
         guard let id = entry["id"] as? String, !id.isEmpty,
           entry["hidden"] as? Bool != true
