@@ -70,6 +70,18 @@ import Testing
   #expect(!OpenAILiveSession.shouldFlush(""))
 }
 
+@Test func splitCompletedSentencesFindsMidTextBoundaries() {
+  let split = OpenAILiveSession.splitCompletedSentences("How are you? I am")
+  #expect(split?.closed == "How are you?")
+  #expect(split?.rest == "I am")
+  let whole = OpenAILiveSession.splitCompletedSentences("All done.")
+  #expect(whole?.closed == "All done.")
+  #expect(whole?.rest == "")
+  #expect(OpenAILiveSession.splitCompletedSentences("Still going") == nil)
+  // A period inside a word (like 1.5) is not a sentence boundary.
+  #expect(OpenAILiveSession.splitCompletedSentences("Version 1.5 is out") == nil)
+}
+
 @Test func fillerWordFilterRemovesPausesWithoutDamagingWords() {
   #expect(FillerWordFilter.apply("So uh I was thinking um about this") == "So I was thinking about this")
   #expect(FillerWordFilter.apply("Uh, um, the answer is yes") == "The answer is yes")

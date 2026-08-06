@@ -451,21 +451,40 @@ actor LiveTranscriptionEngine {
     state.emittedThrough = end
     // Every delta re-emits the growing sentence under a stable id, so the
     // preview flows continuously while the current line extends in place.
+    // Punctuation usually lands mid-delta, so the completed part is split
+    // off and closed; the remainder starts a fresh growing line.
     let turnID = state.pendingTurnID ?? UUID()
     state.pendingTurnID = turnID
-    let turn = TranscriptTurn(
-      id: turnID,
-      start: state.pendingStart ?? max(0, end - 1.12), end: end,
-      speaker: "Unknown",
-      text: state.pendingText, source: source)
-    // Sentence closed (or ran long): the next delta starts a fresh turn.
-    if OpenAILiveSession.shouldFlush(state.pendingText) || state.pendingText.count > 300 {
-      state.pendingText = ""
-      state.pendingStart = nil
-      state.pendingTurnID = nil
+    let start = state.pendingStart ?? max(0, end - 1.12)
+    var closedTurn: TranscriptTurn?
+    var growingTurn: TranscriptTurn?
+    if let (closed, rest) = OpenAILiveSession.splitCompletedSentences(state.pendingText)
+      ?? (state.pendingText.count > 300 ? (state.pendingText, "") : nil)
+    {
+      closedTurn = TranscriptTurn(
+        id: turnID, start: start, end: end,
+        speaker: "Unknown", text: closed, source: source)
+      if rest.isEmpty {
+        state.pendingText = ""
+        state.pendingStart = nil
+        state.pendingTurnID = nil
+      } else {
+        let restID = UUID()
+        state.pendingText = rest
+        state.pendingStart = end
+        state.pendingTurnID = restID
+        growingTurn = TranscriptTurn(
+          id: restID, start: end, end: end,
+          speaker: "Unknown", text: rest, source: source)
+      }
+    } else {
+      growingTurn = TranscriptTurn(
+        id: turnID, start: start, end: end,
+        speaker: "Unknown", text: state.pendingText, source: source)
     }
     states[source] = state
-    await onTurn?(turn)
+    if let closedTurn { await onTurn?(closedTurn) }
+    if let growingTurn { await onTurn?(growingTurn) }
   }
 }
 

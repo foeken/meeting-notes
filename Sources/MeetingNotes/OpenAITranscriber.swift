@@ -285,6 +285,20 @@ final class OpenAILiveSession: @unchecked Sendable {
     return ".!?…".contains(last)
   }
 
+  /// Splits accumulated live text at the last completed sentence. Punctuation
+  /// usually lands mid-delta, so the boundary is searched inside the text,
+  /// not just at its end. Returns nil when no sentence has completed yet.
+  static func splitCompletedSentences(_ text: String) -> (closed: String, rest: String)? {
+    if shouldFlush(text) { return (text, "") }
+    guard
+      let range = text.range(
+        of: #"[.!?…](?=\s)"#, options: [.regularExpression, .backwards])
+    else { return nil }
+    let closed = String(text[..<range.upperBound])
+    let rest = String(text[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+    return (closed, rest)
+  }
+
   init(apiKey: String, onTranscript: @escaping @Sendable (String) -> Void) {
     self.onTranscript = onTranscript
     var request = URLRequest(url: OpenAITranscriber.realtimeURL)
