@@ -243,13 +243,6 @@ private struct GeneralSettingsPane: View {
           .toggleStyle(.switch)
         }
 
-        Label(
-          "Detection stays on this Mac. Camera activity alone never starts a recording.",
-          systemImage: "hand.raised"
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
-
         Divider()
 
         VStack(alignment: .leading, spacing: 4) {
@@ -316,7 +309,7 @@ private struct CodexSettingsPane: View {
       VStack(alignment: .leading, spacing: 18) {
         SettingsPaneHeader(
           title: "ChatGPT",
-          subtitle: "Choose the models used for meeting notes and for meeting tasks."
+          subtitle: "Choose the models used for meeting notes and for meeting threads."
         )
 
         Divider()
@@ -376,20 +369,20 @@ private struct CodexSettingsPane: View {
 
         Divider()
 
-        Text("Meeting tasks")
+        Text("Meeting threads")
           .font(.headline)
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Create tasks automatically")
+            Text("Create threads automatically")
               .font(.body.weight(.medium))
-            Text("Start a Codex task in the background whenever a recording begins.")
+            Text("Start a thread in the background whenever a recording begins.")
               .font(.caption)
               .foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
           Spacer()
-          Toggle("Create tasks automatically", isOn: Binding(
+          Toggle("Create threads automatically", isOn: Binding(
             get: { model.codexAutoCreateThreads },
             set: { model.setCodexAutoCreateThreads($0) }
           ))
@@ -443,7 +436,7 @@ private struct CodexSettingsPane: View {
           }
           .controlSize(.large)
 
-          Text("New meeting tasks use this model. The list comes from Codex itself, so it stays current. Default Model uses whichever model Codex starts tasks with.")
+          Text("New meeting threads use this model. The list comes from Codex itself, so it stays current. Default Model uses whichever model Codex starts threads with.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -458,9 +451,9 @@ private struct CodexSettingsPane: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
-          Text("Meeting task prompt")
+          Text("Meeting thread prompt")
             .font(.headline)
-          Text("Sent when a new Codex task is created for a meeting. Existing tasks are not changed.")
+          Text("Sent when a new thread is created for a meeting. Existing threads are not changed.")
             .font(.caption)
             .foregroundStyle(.secondary)
 
@@ -496,15 +489,15 @@ private struct CodexSettingsPane: View {
         VStack(alignment: .leading, spacing: 12) {
           HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-              Text("Run a task after the notes are ready")
+              Text("Run a thread after the notes are ready")
                 .font(.body.weight(.medium))
-              Text("Sends your instruction to the meeting's Codex task and lets it do the work.")
+              Text("Sends your instruction to the meeting's thread and lets it do the work.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Toggle("Run a task after the notes are ready", isOn: Binding(
+            Toggle("Run a thread after the notes are ready", isOn: Binding(
               get: { model.codexSummaryMessageEnabled },
               set: { model.setCodexSummaryMessageEnabled($0) }
             ))
