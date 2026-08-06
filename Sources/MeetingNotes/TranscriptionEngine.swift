@@ -459,8 +459,12 @@ actor LiveTranscriptionEngine {
     }
     state.pendingText = state.pendingText.isEmpty ? text : state.pendingText + " " + text
     state.emittedThrough = end
-    // ponytail: 300-char cap flushes ASR output that never lands punctuation.
-    guard OpenAILiveSession.shouldFlush(state.pendingText) || state.pendingText.count > 300
+    // Nemotron does not land punctuation reliably, so a sentence is also
+    // flushed after 5 s of held-back text or at the 300-char cap.
+    let heldFor = end - (state.pendingStart ?? end)
+    guard OpenAILiveSession.shouldFlush(state.pendingText)
+      || state.pendingText.count > 300
+      || heldFor > 5
     else {
       states[source] = state
       return
