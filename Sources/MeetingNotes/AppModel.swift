@@ -406,9 +406,15 @@ final class AppModel {
   }
 
   func saveOpenAITranscribeKey() {
-    OpenAITranscribeKeychainStore.save(
-      openAITranscribeKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines))
+    let key = openAITranscribeKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    OpenAITranscribeKeychainStore.save(key)
     openAITranscribeKeyTestState = .idle
+    // Without a key the OpenAI engine cannot work; fall back to on-device so
+    // the Transcriptions pane never shows a selection it cannot honor.
+    if key.isEmpty {
+      if transcriptionEngine == .openAI { setTranscriptionEngine(.onDevice) }
+      if liveTranscriptionEngine == .openAI { setLiveTranscriptionEngine(.onDevice) }
+    }
   }
 
   func testOpenAITranscribeKey() {

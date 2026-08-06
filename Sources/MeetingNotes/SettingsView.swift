@@ -29,8 +29,8 @@ struct SettingsView: View {
           MicrophoneSettingsPane(model: model)
         case .tana:
           TanaSettingsPane(model: model)
-        case .dictionary:
-          DictionarySettingsPane(model: model)
+        case .openAI:
+          OpenAISettingsPane(model: model)
         case .codex:
           CodexSettingsPane(model: model)
         case .summaries:
@@ -127,12 +127,12 @@ private struct WindowKeyObserver: NSViewRepresentable {
 private enum SettingsPane: String, CaseIterable, Identifiable {
   case general
   case codex
-  case dictionary
   case microphone
   case transcriptions
   case summaries
   case storage
   case hooks
+  case openAI
   case tana
 
   var id: Self { self }
@@ -145,7 +145,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case .transcriptions: "Transcriptions"
     case .microphone: "Microphone"
     case .tana: "Tana"
-    case .dictionary: "Dictionary"
+    case .openAI: "OpenAI"
     case .codex: "ChatGPT"
     case .summaries: "Summaries"
     }
@@ -159,7 +159,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case .transcriptions: "text.alignleft"
     case .microphone: "mic"
     case .tana: "point.3.connected.trianglepath.dotted"
-    case .dictionary: "character.book.closed"
+    case .openAI: "key"
     // The Codex pane renders `OpenAISidebarLabel` with the OpenAI mark, so
     // this SF Symbol name is never displayed.
     case .codex: "questionmark"
@@ -988,6 +988,13 @@ private struct HookSettingsPane: View {
 
 private struct TranscriptionsSettingsPane: View {
   @Bindable var model: AppModel
+  @State private var showDictionary = false
+
+  /// The OpenAI engine is only offered once a key exists in the OpenAI pane.
+  private var engineOptions: [TranscriptionEngineOption] {
+    model.openAITranscribeKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty
+      ? [.onDevice] : TranscriptionEngineOption.allCases
+  }
 
   var body: some View {
     ScrollView {
@@ -1016,7 +1023,7 @@ private struct TranscriptionsSettingsPane: View {
             get: { model.transcriptionEngine },
             set: { model.setTranscriptionEngine($0) }
           )) {
-            ForEach(TranscriptionEngineOption.allCases, id: \.self) { option in
+            ForEach(engineOptions, id: \.self) { option in
               Text(option.label).tag(option)
             }
           }
@@ -1042,7 +1049,7 @@ private struct TranscriptionsSettingsPane: View {
             get: { model.liveTranscriptionEngine },
             set: { model.setLiveTranscriptionEngine($0) }
           )) {
-            ForEach(TranscriptionEngineOption.allCases, id: \.self) { option in
+            ForEach(engineOptions, id: \.self) { option in
               Text(option.label).tag(option)
             }
           }
@@ -1050,37 +1057,29 @@ private struct TranscriptionsSettingsPane: View {
           .fixedSize()
         }
 
-        if model.transcriptionEngine == .openAI || model.liveTranscriptionEngine == .openAI {
-          HStack(spacing: 16) {
-            Text("API key")
+        HStack(spacing: 16) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Dictionary")
               .font(.body.weight(.medium))
-            SecureField("sk-...", text: Binding(
-              get: { model.openAITranscribeKeyDraft },
-              set: { model.openAITranscribeKeyDraft = $0 }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .onChange(of: model.openAITranscribeKeyDraft) { model.saveOpenAITranscribeKey() }
-            switch model.openAITranscribeKeyTestState {
-            case .idle:
-              Button("Test", action: model.testOpenAITranscribeKey)
-                .help("Check that the API key works")
-            case .testing:
-              ProgressView()
-                .controlSize(.small)
-            case .succeeded:
-              Label("Works", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .help("The API key works")
-            case .failed(let message):
-              Button("Retry", action: model.testOpenAITranscribeKey)
-                .help(message)
-            }
-          }
-          if case .failed(let message) = model.openAITranscribeKeyTestState {
-            Text(message)
+            Text("Help Meeting Notes recognize names and specialist terminology.")
               .font(.caption)
-              .foregroundStyle(.red)
+              .foregroundStyle(.secondary)
           }
+          Spacer()
+          Button("Edit Dictionary…") { showDictionary = true }
+        }
+        .sheet(isPresented: $showDictionary) {
+          VStack(spacing: 0) {
+            DictionarySettingsPane(model: model)
+            Divider()
+            HStack {
+              Spacer()
+              Button("Done") { showDictionary = false }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(12)
+          }
+          .frame(width: 560, height: 520)
         }
 
         Divider()
@@ -1350,6 +1349,55 @@ private struct TanaSettingsPane: View {
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      .padding(28)
+    }
+  }
+}
+
+private struct OpenAISettingsPane: View {
+  @Bindable var model: AppModel
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 18) {
+        SettingsPaneHeader(
+          title: "OpenAI",
+          subtitle: "An API key unlocks OpenAI transcription in the Transcriptions pane."
+        )
+
+        Divider()
+
+        HStack(spacing: 16) {
+          Text("API key")
+            .font(.body.weight(.medium))
+          SecureField("sk-...", text: Binding(
+            get: { model.openAITranscribeKeyDraft },
+            set: { model.openAITranscribeKeyDraft = $0 }
+          ))
+          .textFieldStyle(.roundedBorder)
+          .onChange(of: model.openAITranscribeKeyDraft) { model.saveOpenAITranscribeKey() }
+          switch model.openAITranscribeKeyTestState {
+          case .idle:
+            Button("Test", action: model.testOpenAITranscribeKey)
+              .help("Check that the API key works")
+          case .testing:
+            ProgressView()
+              .controlSize(.small)
+          case .succeeded:
+            Label("Works", systemImage: "checkmark.circle.fill")
+              .foregroundStyle(.green)
+              .help("The API key works")
+          case .failed(let message):
+            Button("Retry", action: model.testOpenAITranscribeKey)
+              .help(message)
+          }
+        }
+        if case .failed(let message) = model.openAITranscribeKeyTestState {
+          Text(message)
+            .font(.caption)
+            .foregroundStyle(.red)
         }
       }
       .padding(28)
