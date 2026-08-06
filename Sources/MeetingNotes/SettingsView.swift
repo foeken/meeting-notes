@@ -1057,6 +1057,8 @@ private struct TranscriptionsSettingsPane: View {
           .fixedSize()
         }
 
+        Divider()
+
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
             Text("Dictionary")
