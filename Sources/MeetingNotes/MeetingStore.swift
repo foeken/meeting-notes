@@ -468,16 +468,18 @@ actor MeetingStore {
     let manager = FileManager.default
     var freedBytes: Int64 = 0
     for stateURL in allStateURLs() {
-      guard let data = try? Data(contentsOf: stateURL),
-        let document = try? decoder.decode(MeetingDocument.self, from: data),
-        document.status == .complete
-      else { continue }
+      let isComplete = (try? Data(contentsOf: stateURL))
+        .flatMap { try? decoder.decode(MeetingDocument.self, from: $0) }?
+        .status == .complete
       let targetFolder = stateURL.deletingLastPathComponent()
       var removedAny = false
       for name in ["microphone.wav", "system.wav"] {
         let url = targetFolder.appending(path: name)
         guard manager.fileExists(atPath: url.path) else { continue }
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        // A header-only WAV (44 bytes) has zero audio samples: nothing to
+        // recover, so it is removable even for unfinished captures.
+        guard isComplete || size <= 44 else { continue }
         do {
           try manager.removeItem(at: url)
           freedBytes += size
