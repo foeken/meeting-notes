@@ -411,16 +411,27 @@ actor LiveTranscriptionEngine {
     onTurn = nil
   }
 
-  /// Switches the running preview to the OpenAI realtime API mid-meeting.
-  /// The persisted setting is untouched, so the next meeting starts back on
-  /// the configured engine.
-  func upgradeToOpenAI() {
-    guard running, openAIKey == nil,
-      let key = OpenAITranscribeKeychainStore.load(), !key.isEmpty
-    else { return }
-    openAIKey = key
-    for source in [TranscriptTurn.Source.microphone, .system] {
-      states[source, default: StreamState()].manager = nil
+  /// Switches the running preview between the on-device engine and the
+  /// OpenAI realtime API mid-meeting. The persisted setting is untouched, so
+  /// the next meeting starts on the configured engine.
+  func setLiveOpenAI(_ enabled: Bool) {
+    guard running else { return }
+    if enabled {
+      guard openAIKey == nil,
+        let key = OpenAITranscribeKeychainStore.load(), !key.isEmpty
+      else { return }
+      openAIKey = key
+      for source in [TranscriptTurn.Source.microphone, .system] {
+        states[source, default: StreamState()].manager = nil
+      }
+    } else {
+      guard openAIKey != nil else { return }
+      openAIKey = nil
+      for source in [TranscriptTurn.Source.microphone, .system] {
+        // close() flushes any sentence the realtime session still holds.
+        states[source, default: StreamState()].openAISession?.close()
+        states[source, default: StreamState()].openAISession = nil
+      }
     }
   }
 

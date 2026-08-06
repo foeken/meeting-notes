@@ -29,10 +29,9 @@ final class AppModel {
   /// API — either configured, or upgraded mid-meeting. Resets on stop.
   var liveUsingOpenAI = false
 
-  /// The upgrade affordance only makes sense while recording, still on the
-  /// on-device preview, with a key available.
-  var canUpgradeLivePreview: Bool {
-    (state == .recording || state == .paused) && !liveUsingOpenAI
+  /// The live engine switch only makes sense while recording with a key set.
+  var canSwitchLivePreview: Bool {
+    (state == .recording || state == .paused)
       && !openAITranscribeKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty
   }
   var statusText = "Ready" {
@@ -415,16 +414,17 @@ final class AppModel {
         : "Live transcription runs on this Mac")
   }
 
-  /// One-off upgrade of the running meeting's preview to the OpenAI realtime
-  /// API. The persisted setting stays on-device, so the next meeting starts
-  /// back on the configured engine.
-  func upgradeLiveToOpenAI() {
-    guard state == .recording || state == .paused, !liveUsingOpenAI,
-      !(OpenAITranscribeKeychainStore.load() ?? "").isEmpty
-    else { return }
-    liveUsingOpenAI = true
-    Task { await live.upgradeToOpenAI() }
-    showTransientStatus("Live transcription upgraded for this meeting")
+  /// Switches the running meeting's preview engine on the fly. The persisted
+  /// setting stays as configured, so the next meeting starts on that engine.
+  func setLivePreviewOpenAI(_ enabled: Bool) {
+    guard state == .recording || state == .paused, liveUsingOpenAI != enabled else { return }
+    if enabled, (OpenAITranscribeKeychainStore.load() ?? "").isEmpty { return }
+    liveUsingOpenAI = enabled
+    Task { await live.setLiveOpenAI(enabled) }
+    showTransientStatus(
+      enabled
+        ? "Live transcription switched to OpenAI for this meeting"
+        : "Live transcription switched to on-device for this meeting")
   }
 
   func saveOpenAITranscribeKey() {

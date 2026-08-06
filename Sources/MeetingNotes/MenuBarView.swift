@@ -255,23 +255,26 @@ struct MenuBarView: View {
         Label("Live transcript", systemImage: "text.alignleft")
           .font(.caption.weight(.semibold))
         Spacer()
-        if model.liveUsingOpenAI {
-          Text("OPENAI")
-            .font(.system(size: 9, weight: .bold))
-            .tracking(0.6)
-            .foregroundStyle(.secondary)
-        } else {
-          Text("LOCAL")
-            .font(.system(size: 9, weight: .bold))
-            .tracking(0.6)
-            .foregroundStyle(.secondary)
-          if model.canUpgradeLivePreview {
-            Button("Upgrade") { model.upgradeLiveToOpenAI() }
+        if model.canSwitchLivePreview {
+          HStack(spacing: 6) {
+            Button("LOCAL") { model.setLivePreviewOpenAI(false) }
               .buttonStyle(.plain)
               .font(.system(size: 9, weight: .bold))
-              .foregroundStyle(.tint)
-              .help("Use the OpenAI live engine for the rest of this meeting")
+              .tracking(0.6)
+              .foregroundStyle(model.liveUsingOpenAI ? .tertiary : .secondary)
+              .help("Transcribe the live preview on this Mac")
+            Button("OPENAI") { model.setLivePreviewOpenAI(true) }
+              .buttonStyle(.plain)
+              .font(.system(size: 9, weight: .bold))
+              .tracking(0.6)
+              .foregroundStyle(model.liveUsingOpenAI ? .secondary : .tertiary)
+              .help("Transcribe the live preview with the OpenAI API")
           }
+        } else {
+          Text(model.liveUsingOpenAI ? "OPENAI" : "LOCAL")
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.6)
+            .foregroundStyle(.secondary)
         }
       }
       .padding(.horizontal, 11)
