@@ -752,6 +752,9 @@ final class AppModel {
   /// app. Only a list that was already showing "today" moves; a deliberately
   /// selected earlier day is left alone.
   func handleDayChange() {
+    // Re-evaluate the suggested title as well: yesterday's last event must
+    // not survive into the next morning.
+    Task { await loadCalendarSuggestion() }
     guard followsCurrentDay else { return }
     let today = Calendar.autoupdatingCurrent.startOfDay(for: Date())
     guard selectedMeetingDate != today else { return }
@@ -1680,9 +1683,18 @@ final class AppModel {
   }
 
   func loadCalendarSuggestion() async {
-    guard state == .idle,
-      let suggestion = await calendar.currentMeeting(excluding: stoppedMeetingExclusion)
-    else { return }
+    guard state == .idle else { return }
+    guard let suggestion = await calendar.currentMeeting(excluding: stoppedMeetingExclusion)
+    else {
+      // A suggested title whose event has passed (for example overnight) must
+      // not linger in the title box. User-typed titles carry no metadata and
+      // are left alone.
+      if calendarMetadata != nil {
+        title = ""
+        calendarMetadata = nil
+      }
+      return
+    }
     title = suggestion.title
     calendarMetadata = suggestion.metadata
   }

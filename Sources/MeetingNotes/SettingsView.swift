@@ -129,8 +129,8 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
   case codex
   case dictionary
   case microphone
-  case summaries
   case transcriptions
+  case summaries
   case storage
   case hooks
   case tana
