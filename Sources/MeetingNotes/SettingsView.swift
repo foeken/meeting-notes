@@ -8,9 +8,17 @@ struct SettingsView: View {
 
   var body: some View {
     HSplitView {
-      List(SettingsPane.allCases, selection: $selection) { pane in
-        sidebarLabel(for: pane)
-          .tag(pane)
+      List(selection: $selection) {
+        ForEach(SettingsPane.mainPanes) { pane in
+          sidebarLabel(for: pane)
+            .tag(pane)
+        }
+        Section("Integrations") {
+          ForEach(SettingsPane.integrationPanes) { pane in
+            sidebarLabel(for: pane)
+              .tag(pane)
+          }
+        }
       }
       .listStyle(.sidebar)
       .frame(minWidth: 150, idealWidth: 170, maxWidth: 200)
@@ -137,6 +145,11 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
 
   var id: Self { self }
 
+  static let mainPanes: [SettingsPane] = [
+    .general, .microphone, .transcriptions, .summaries, .storage, .openAI,
+  ]
+  static let integrationPanes: [SettingsPane] = [.codex, .tana, .hooks]
+
   var title: String {
     switch self {
     case .general: "General"
@@ -145,7 +158,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case .transcriptions: "Transcriptions"
     case .microphone: "Microphone"
     case .tana: "Tana"
-    case .openAI: "OpenAI"
+    case .openAI: "Credentials"
     case .codex: "ChatGPT"
     case .summaries: "Summaries"
     }
@@ -272,29 +285,27 @@ private struct GeneralSettingsPane: View {
               .background(Color(nsColor: .quaternarySystemFill), in: Capsule())
               .overlay(Capsule().stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
             }
+          }
+          .padding(.top, 4)
 
-            HStack(spacing: 4) {
-              TextField("Add word", text: $model.ignoredMeetingTitleDraft)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 140)
-                .onSubmit { model.addIgnoredMeetingTitle() }
-              Button {
-                model.addIgnoredMeetingTitle()
-              } label: {
-                Image(systemName: "plus")
-              }
-              .disabled(
-                model.ignoredMeetingTitleDraft.trimmingCharacters(in: .whitespaces).isEmpty)
-              .help("Add word")
+          HStack(spacing: 4) {
+            TextField("Add word", text: $model.ignoredMeetingTitleDraft)
+              .textFieldStyle(.roundedBorder)
+              .frame(width: 140)
+              .onSubmit { model.addIgnoredMeetingTitle() }
+            Button {
+              model.addIgnoredMeetingTitle()
+            } label: {
+              Image(systemName: "plus")
             }
+            .disabled(
+              model.ignoredMeetingTitleDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+            .help("Add word")
           }
           .padding(.top, 4)
         }
 
         Divider()
-
-        Text("Updates")
-          .font(.headline)
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
