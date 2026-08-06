@@ -314,9 +314,6 @@ private struct CodexSettingsPane: View {
 
         Divider()
 
-        Text("Meeting threads")
-          .font(.headline)
-
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
             Text("Create threads automatically")
@@ -338,53 +335,44 @@ private struct CodexSettingsPane: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
-          Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
-            GridRow {
-              Text("Model")
-                .gridColumnAlignment(.trailing)
-              HStack(spacing: 8) {
-                Picker("Model", selection: Binding(
-                  get: { model.codexModel },
-                  set: { model.setCodexModel($0) }
-                )) {
-                  Text("Default Model").tag("")
-                  ForEach(model.codexAvailableModels) { choice in
-                    Text(choice.displayName).tag(choice.id)
-                  }
-                }
-                .labelsHidden()
-                .fixedSize()
-
-                if model.codexModelsLoading {
-                  ProgressView().controlSize(.small)
-                }
+          HStack(spacing: 16) {
+            Text("Model for new threads")
+              .font(.body.weight(.medium))
+            Spacer()
+            if model.codexModelsLoading {
+              ProgressView().controlSize(.small)
+            }
+            Picker("Model", selection: Binding(
+              get: { model.codexModel },
+              set: { model.setCodexModel($0) }
+            )) {
+              Text("Default Model").tag("")
+              ForEach(model.codexAvailableModels) { choice in
+                Text(choice.displayName).tag(choice.id)
               }
             }
+            .labelsHidden()
+            .fixedSize()
+          }
 
-            if !model.codexReasoningEffortChoices.isEmpty {
-              GridRow {
-                Text("Reasoning")
-                  .gridColumnAlignment(.trailing)
-                Picker("Reasoning", selection: Binding(
-                  get: { model.codexReasoningEffort },
-                  set: { model.setCodexReasoningEffort($0) }
-                )) {
-                  Text("Model default").tag("")
-                  ForEach(model.codexReasoningEffortChoices, id: \.self) { effort in
-                    Text(effort.capitalized).tag(effort)
-                  }
+          if !model.codexReasoningEffortChoices.isEmpty {
+            HStack(spacing: 16) {
+              Text("Reasoning")
+                .font(.body.weight(.medium))
+              Spacer()
+              Picker("Reasoning", selection: Binding(
+                get: { model.codexReasoningEffort },
+                set: { model.setCodexReasoningEffort($0) }
+              )) {
+                Text("Model default").tag("")
+                ForEach(model.codexReasoningEffortChoices, id: \.self) { effort in
+                  Text(effort.capitalized).tag(effort)
                 }
-                .labelsHidden()
-                .fixedSize()
               }
+              .labelsHidden()
+              .fixedSize()
             }
           }
-          .controlSize(.large)
-
-          Text("New meeting threads use this model. The list comes from Codex itself, so it stays current. Default Model uses whichever model Codex starts threads with.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
 
           if !model.codexModelStatusText.isEmpty {
             Text(model.codexModelStatusText)
@@ -434,7 +422,7 @@ private struct CodexSettingsPane: View {
         VStack(alignment: .leading, spacing: 12) {
           HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-              Text("Run a thread after the notes are ready")
+              Text("Automatically send a message after the notes are ready")
                 .font(.body.weight(.medium))
               Text("Sends your instruction to the meeting's thread and lets it do the work.")
                 .font(.caption)
@@ -442,7 +430,7 @@ private struct CodexSettingsPane: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Toggle("Run a thread after the notes are ready", isOn: Binding(
+            Toggle("Automatically send a message after the notes are ready", isOn: Binding(
               get: { model.codexSummaryMessageEnabled },
               set: { model.setCodexSummaryMessageEnabled($0) }
             ))
@@ -507,48 +495,44 @@ private struct SummariesSettingsPane: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
-          Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
-            GridRow {
-              Text("Model")
-                .gridColumnAlignment(.trailing)
-              HStack(spacing: 8) {
-                Picker("Model", selection: Binding(
-                  get: { model.summaryModel },
-                  set: { model.setSummaryModel($0) }
-                )) {
-                  Text("Default Model").tag("")
-                  ForEach(model.codexAvailableModels) { choice in
-                    Text(choice.displayName).tag(choice.id)
-                  }
-                }
-                .labelsHidden()
-                .fixedSize()
-
-                if model.codexModelsLoading {
-                  ProgressView().controlSize(.small)
-                }
+          HStack(spacing: 16) {
+            Text("Model")
+              .font(.body.weight(.medium))
+            Spacer()
+            if model.codexModelsLoading {
+              ProgressView().controlSize(.small)
+            }
+            Picker("Model", selection: Binding(
+              get: { model.summaryModel },
+              set: { model.setSummaryModel($0) }
+            )) {
+              Text("Default Model").tag("")
+              ForEach(model.codexAvailableModels) { choice in
+                Text(choice.displayName).tag(choice.id)
               }
             }
+            .labelsHidden()
+            .fixedSize()
+          }
 
-            if !model.summaryReasoningEffortChoices.isEmpty {
-              GridRow {
-                Text("Reasoning")
-                  .gridColumnAlignment(.trailing)
-                Picker("Reasoning", selection: Binding(
-                  get: { model.summaryReasoningEffort },
-                  set: { model.setSummaryReasoningEffort($0) }
-                )) {
-                  Text("Model default").tag("")
-                  ForEach(model.summaryReasoningEffortChoices, id: \.self) { effort in
-                    Text(effort.capitalized).tag(effort)
-                  }
+          if !model.summaryReasoningEffortChoices.isEmpty {
+            HStack(spacing: 16) {
+              Text("Reasoning")
+                .font(.body.weight(.medium))
+              Spacer()
+              Picker("Reasoning", selection: Binding(
+                get: { model.summaryReasoningEffort },
+                set: { model.setSummaryReasoningEffort($0) }
+              )) {
+                Text("Model default").tag("")
+                ForEach(model.summaryReasoningEffortChoices, id: \.self) { effort in
+                  Text(effort.capitalized).tag(effort)
                 }
-                .labelsHidden()
-                .fixedSize()
               }
+              .labelsHidden()
+              .fixedSize()
             }
           }
-          .controlSize(.large)
 
           Text("Used to write the summary and topics for each finished meeting. Default Model uses whichever model Codex runs by default.")
             .font(.caption)
