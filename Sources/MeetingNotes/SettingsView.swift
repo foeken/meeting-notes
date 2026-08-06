@@ -309,63 +309,8 @@ private struct CodexSettingsPane: View {
       VStack(alignment: .leading, spacing: 18) {
         SettingsPaneHeader(
           title: "ChatGPT",
-          subtitle: "Choose the models used for meeting notes and for meeting threads."
+          subtitle: "Customize how meeting threads are prepared and run."
         )
-
-        Divider()
-
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Meeting notes")
-            .font(.headline)
-
-          Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
-            GridRow {
-              Text("Model")
-                .gridColumnAlignment(.trailing)
-              HStack(spacing: 8) {
-                Picker("Model", selection: Binding(
-                  get: { model.summaryModel },
-                  set: { model.setSummaryModel($0) }
-                )) {
-                  Text("Default Model").tag("")
-                  ForEach(model.codexAvailableModels) { choice in
-                    Text(choice.displayName).tag(choice.id)
-                  }
-                }
-                .labelsHidden()
-                .fixedSize()
-
-                if model.codexModelsLoading {
-                  ProgressView().controlSize(.small)
-                }
-              }
-            }
-
-            if !model.summaryReasoningEffortChoices.isEmpty {
-              GridRow {
-                Text("Reasoning")
-                  .gridColumnAlignment(.trailing)
-                Picker("Reasoning", selection: Binding(
-                  get: { model.summaryReasoningEffort },
-                  set: { model.setSummaryReasoningEffort($0) }
-                )) {
-                  Text("Model default").tag("")
-                  ForEach(model.summaryReasoningEffortChoices, id: \.self) { effort in
-                    Text(effort.capitalized).tag(effort)
-                  }
-                }
-                .labelsHidden()
-                .fixedSize()
-              }
-            }
-          }
-          .controlSize(.large)
-
-          Text("Used to write the summary and topics for each finished meeting. Default Model uses whichever model Codex runs by default.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
 
         Divider()
 
@@ -561,6 +506,58 @@ private struct SummariesSettingsPane: View {
 
         Divider()
 
+        VStack(alignment: .leading, spacing: 8) {
+          Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
+            GridRow {
+              Text("Model")
+                .gridColumnAlignment(.trailing)
+              HStack(spacing: 8) {
+                Picker("Model", selection: Binding(
+                  get: { model.summaryModel },
+                  set: { model.setSummaryModel($0) }
+                )) {
+                  Text("Default Model").tag("")
+                  ForEach(model.codexAvailableModels) { choice in
+                    Text(choice.displayName).tag(choice.id)
+                  }
+                }
+                .labelsHidden()
+                .fixedSize()
+
+                if model.codexModelsLoading {
+                  ProgressView().controlSize(.small)
+                }
+              }
+            }
+
+            if !model.summaryReasoningEffortChoices.isEmpty {
+              GridRow {
+                Text("Reasoning")
+                  .gridColumnAlignment(.trailing)
+                Picker("Reasoning", selection: Binding(
+                  get: { model.summaryReasoningEffort },
+                  set: { model.setSummaryReasoningEffort($0) }
+                )) {
+                  Text("Model default").tag("")
+                  ForEach(model.summaryReasoningEffortChoices, id: \.self) { effort in
+                    Text(effort.capitalized).tag(effort)
+                  }
+                }
+                .labelsHidden()
+                .fixedSize()
+              }
+            }
+          }
+          .controlSize(.large)
+
+          Text("Used to write the summary and topics for each finished meeting. Default Model uses whichever model Codex runs by default.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Divider()
+
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
             Text("Language")
@@ -617,6 +614,7 @@ private struct SummariesSettingsPane: View {
       }
       .padding(28)
     }
+    .onAppear { model.refreshCodexModels() }
   }
 }
 
