@@ -1120,13 +1120,6 @@ private struct TranscriptionsSettingsPane: View {
           .toggleStyle(.switch)
         }
 
-        Label(
-          "Off by default. When off, audio is deleted after successful processing.",
-          systemImage: "lock.shield"
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
-
         Divider()
 
         HStack(spacing: 16) {

@@ -1297,7 +1297,7 @@ final class AppModel {
     saveTranscriptRetentionSettings()
     transcriptRetentionStatusText = enabled
       ? "Detailed records will be deleted after \(transcriptRetentionDays) days."
-      : "Automatic deletion is off."
+      : ""
     if enabled {
       Task { await runTranscriptRetentionCleanup(reportStatus: true) }
     }
