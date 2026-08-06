@@ -1017,7 +1017,28 @@ private struct TranscriptionsSettingsPane: View {
           .fixedSize()
         }
 
-        if model.transcriptionEngine == .openAI {
+        HStack(spacing: 16) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Live transcription engine")
+              .font(.body.weight(.medium))
+            Text("Used for the live preview while recording.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          Spacer()
+          Picker("Live transcription engine", selection: Binding(
+            get: { model.liveTranscriptionEngine },
+            set: { model.setLiveTranscriptionEngine($0) }
+          )) {
+            ForEach(TranscriptionEngineOption.allCases, id: \.self) { option in
+              Text(option.label).tag(option)
+            }
+          }
+          .labelsHidden()
+          .fixedSize()
+        }
+
+        if model.transcriptionEngine == .openAI || model.liveTranscriptionEngine == .openAI {
           HStack(spacing: 16) {
             Text("API key")
               .font(.body.weight(.medium))
@@ -1029,26 +1050,18 @@ private struct TranscriptionsSettingsPane: View {
             .onChange(of: model.openAITranscribeKeyDraft) { model.saveOpenAITranscribeKey() }
             switch model.openAITranscribeKeyTestState {
             case .idle:
-              Button(action: model.testOpenAITranscribeKey) {
-                Image(systemName: "bolt.circle")
-              }
-              .buttonStyle(.plain)
-              .foregroundStyle(.secondary)
-              .help("Test the API key")
+              Button("Test", action: model.testOpenAITranscribeKey)
+                .help("Check that the API key works")
             case .testing:
               ProgressView()
                 .controlSize(.small)
             case .succeeded:
-              Image(systemName: "checkmark.circle.fill")
+              Label("Works", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
                 .help("The API key works")
             case .failed(let message):
-              Button(action: model.testOpenAITranscribeKey) {
-                Image(systemName: "exclamationmark.circle.fill")
-                  .foregroundStyle(.red)
-              }
-              .buttonStyle(.plain)
-              .help(message)
+              Button("Retry", action: model.testOpenAITranscribeKey)
+                .help(message)
             }
           }
           if case .failed(let message) = model.openAITranscribeKeyTestState {

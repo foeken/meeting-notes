@@ -21,6 +21,7 @@ enum OpenAIKeyTestState: Equatable, Sendable {
 
 enum TranscriptionEngineSettingsStore {
   private static let key = "transcription.engine"
+  private static let liveKey = "transcription.liveEngine"
 
   static func load(from defaults: UserDefaults = .standard) -> TranscriptionEngineOption {
     guard let rawValue = defaults.string(forKey: key) else { return .onDevice }
@@ -29,6 +30,15 @@ enum TranscriptionEngineSettingsStore {
 
   static func save(_ option: TranscriptionEngineOption, to defaults: UserDefaults = .standard) {
     defaults.set(option.rawValue, forKey: key)
+  }
+
+  static func loadLive(from defaults: UserDefaults = .standard) -> TranscriptionEngineOption {
+    guard let rawValue = defaults.string(forKey: liveKey) else { return .onDevice }
+    return TranscriptionEngineOption(rawValue: rawValue) ?? .onDevice
+  }
+
+  static func saveLive(_ option: TranscriptionEngineOption, to defaults: UserDefaults = .standard) {
+    defaults.set(option.rawValue, forKey: liveKey)
   }
 }
 
@@ -83,7 +93,7 @@ enum OpenAITranscriber {
   static func testKey(_ apiKey: String) async -> String? {
     var request = URLRequest(
       url: URL(string: "https://api.openai.com/v1/models/\(fileModel)")!)
-    request.timeoutInterval = 15
+    request.timeoutInterval = 30
     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     do {
       let (data, response) = try await URLSession.shared.data(for: request)

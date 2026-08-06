@@ -267,7 +267,7 @@ actor LiveTranscriptionEngine {
     states = [.microphone: StreamState(), .system: StreamState()]
     self.onTurn = onTurn
     self.sessionID = sessionID
-    openAIKey = TranscriptionEngineSettingsStore.load() == .openAI
+    openAIKey = TranscriptionEngineSettingsStore.loadLive() == .openAI
       ? OpenAITranscribeKeychainStore.load() : nil
     running = true
     return sessionID

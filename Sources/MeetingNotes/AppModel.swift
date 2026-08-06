@@ -69,6 +69,7 @@ final class AppModel {
   var removeFillerWords = FillerWordSettingsStore.load()
   var meetingNotesLanguage = MeetingNotesLanguageStore.load()
   var transcriptionEngine = TranscriptionEngineSettingsStore.load()
+  var liveTranscriptionEngine = TranscriptionEngineSettingsStore.loadLive()
   var openAITranscribeKeyDraft = OpenAITranscribeKeychainStore.load() ?? ""
   var openAITranscribeKeyTestState = OpenAIKeyTestState.idle
   var ignoredMeetingTitlesDraft = IgnoredMeetingTitlesStore.load().joined(separator: ", ")
@@ -380,6 +381,16 @@ final class AppModel {
       engine == .openAI
         ? "Transcription uses the OpenAI API"
         : "Transcription runs on this Mac")
+  }
+
+  func setLiveTranscriptionEngine(_ engine: TranscriptionEngineOption) {
+    guard liveTranscriptionEngine != engine else { return }
+    liveTranscriptionEngine = engine
+    TranscriptionEngineSettingsStore.saveLive(engine)
+    showTransientStatus(
+      engine == .openAI
+        ? "Live transcription uses the OpenAI API"
+        : "Live transcription runs on this Mac")
   }
 
   func saveOpenAITranscribeKey() {
