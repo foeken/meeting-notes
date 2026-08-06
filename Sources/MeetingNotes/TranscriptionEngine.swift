@@ -250,6 +250,9 @@ actor LiveTranscriptionEngine {
     // whole sentences instead of chunk-sized fragments.
     var pendingText = ""
     var pendingStart: TimeInterval?
+    // Stable id for the growing sentence: every delta re-emits the same turn
+    // so the preview updates in place instead of stacking fragments.
+    var pendingTurnID: UUID?
   }
 
   private let transcriber: NemotronTranscriber
@@ -386,22 +389,9 @@ actor LiveTranscriptionEngine {
     running = false
     sessionID = nil
     openAIKey = nil
-    // Flush any sentence still held back so the live document keeps every
-    // word up to the stop click.
-    if let onTurn {
-      for source in [TranscriptTurn.Source.microphone, .system] {
-        let state = states[source, default: StreamState()]
-        let text = state.pendingText
-        guard !text.isEmpty else { continue }
-        let turn = TranscriptTurn(
-          start: state.pendingStart ?? max(0, state.emittedThrough - 1.12),
-          end: state.emittedThrough,
-          speaker: "Unknown", text: text, source: source)
-        states[source, default: StreamState()].pendingText = ""
-        states[source, default: StreamState()].pendingStart = nil
-        Task { await onTurn(turn) }
-      }
-    }
+    // No held-back text to flush: every delta already re-emitted the growing
+    // sentence under its stable id, so the store has the words up to the
+    // stop click.
     for source in [TranscriptTurn.Source.microphone, .system] {
       states[source, default: StreamState()].queue.cancel()
       states[source, default: StreamState()].manager = nil
@@ -459,22 +449,21 @@ actor LiveTranscriptionEngine {
     }
     state.pendingText = state.pendingText.isEmpty ? text : state.pendingText + " " + text
     state.emittedThrough = end
-    // Nemotron does not land punctuation reliably, so a sentence is also
-    // flushed after 5 s of held-back text or at the 300-char cap.
-    let heldFor = end - (state.pendingStart ?? end)
-    guard OpenAILiveSession.shouldFlush(state.pendingText)
-      || state.pendingText.count > 300
-      || heldFor > 5
-    else {
-      states[source] = state
-      return
-    }
+    // Every delta re-emits the growing sentence under a stable id, so the
+    // preview flows continuously while the current line extends in place.
+    let turnID = state.pendingTurnID ?? UUID()
+    state.pendingTurnID = turnID
     let turn = TranscriptTurn(
+      id: turnID,
       start: state.pendingStart ?? max(0, end - 1.12), end: end,
       speaker: "Unknown",
       text: state.pendingText, source: source)
-    state.pendingText = ""
-    state.pendingStart = nil
+    // Sentence closed (or ran long): the next delta starts a fresh turn.
+    if OpenAILiveSession.shouldFlush(state.pendingText) || state.pendingText.count > 300 {
+      state.pendingText = ""
+      state.pendingStart = nil
+      state.pendingTurnID = nil
+    }
     states[source] = state
     await onTurn?(turn)
   }

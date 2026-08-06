@@ -1805,9 +1805,14 @@ final class AppModel {
       let liveSessionID = await live.start { [weak self, store] turn in
         try? await store.append(turn)
         await MainActor.run {
-          self?.recentTurns.append(turn)
-          if let count = self?.recentTurns.count, count > 4 {
-            self?.recentTurns.removeFirst(count - 4)
+          guard let self else { return }
+          if let index = self.recentTurns.lastIndex(where: { $0.id == turn.id }) {
+            self.recentTurns[index] = turn
+          } else {
+            self.recentTurns.append(turn)
+          }
+          if self.recentTurns.count > 4 {
+            self.recentTurns.removeFirst(self.recentTurns.count - 4)
           }
         }
       }

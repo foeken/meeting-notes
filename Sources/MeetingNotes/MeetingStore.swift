@@ -157,8 +157,14 @@ actor MeetingStore {
     return (document, targetFolder)
   }
 
+  /// Appends a live turn, or replaces it when a turn with the same id was
+  /// already appended — the live preview grows the current sentence in place.
   func append(_ turn: TranscriptTurn) throws {
-    meeting?.transcript.append(turn)
+    if let index = meeting?.transcript.lastIndex(where: { $0.id == turn.id }) {
+      meeting?.transcript[index] = turn
+    } else {
+      meeting?.transcript.append(turn)
+    }
     try persist()
   }
 
