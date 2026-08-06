@@ -72,7 +72,8 @@ final class AppModel {
   var liveTranscriptionEngine = TranscriptionEngineSettingsStore.loadLive()
   var openAITranscribeKeyDraft = OpenAITranscribeKeychainStore.load() ?? ""
   var openAITranscribeKeyTestState = OpenAIKeyTestState.idle
-  var ignoredMeetingTitlesDraft = IgnoredMeetingTitlesStore.load().joined(separator: ", ")
+  var ignoredMeetingTitles = IgnoredMeetingTitlesStore.load()
+  var ignoredMeetingTitleDraft = ""
   var updateChannel = UpdateChannelSettingsStore.load()
   var automaticTranscriptDeletionEnabled = true
   var transcriptRetentionDays = TranscriptRetentionSettings.defaultDays
@@ -241,8 +242,19 @@ final class AppModel {
     }
   }
 
-  func persistIgnoredMeetingTitles() {
-    IgnoredMeetingTitlesStore.save(IgnoredMeetingTitlesStore.parse(ignoredMeetingTitlesDraft))
+  func addIgnoredMeetingTitle() {
+    let word = ignoredMeetingTitleDraft.trimmingCharacters(in: .whitespaces)
+    ignoredMeetingTitleDraft = ""
+    guard !word.isEmpty,
+      !ignoredMeetingTitles.contains(where: { $0.caseInsensitiveCompare(word) == .orderedSame })
+    else { return }
+    ignoredMeetingTitles.append(word)
+    IgnoredMeetingTitlesStore.save(ignoredMeetingTitles)
+  }
+
+  func removeIgnoredMeetingTitle(_ word: String) {
+    ignoredMeetingTitles.removeAll { $0 == word }
+    IgnoredMeetingTitlesStore.save(ignoredMeetingTitles)
   }
 
   func persistCodexPromptDraft() {
