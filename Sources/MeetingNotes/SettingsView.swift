@@ -1021,9 +1021,14 @@ private struct TranscriptionsSettingsPane: View {
           VStack(alignment: .leading, spacing: 4) {
             Text("Live transcription engine")
               .font(.body.weight(.medium))
-            Text("Used for the live preview while recording.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
+            Text(
+              model.liveTranscriptionEngine == .openAI
+                ? "Used for the live preview while recording. OpenAI streams audio continuously, which can get expensive for long meetings."
+                : "Used for the live preview while recording."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
           }
           Spacer()
           Picker("Live transcription engine", selection: Binding(
@@ -1069,12 +1074,6 @@ private struct TranscriptionsSettingsPane: View {
               .font(.caption)
               .foregroundStyle(.red)
           }
-          Label(
-            "The key is stored in the Keychain. If a transcription request fails, the app falls back to on-device transcription.",
-            systemImage: "key"
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
         }
 
         Divider()
