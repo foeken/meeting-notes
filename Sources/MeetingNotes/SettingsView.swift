@@ -566,7 +566,7 @@ private struct SummariesSettingsPane: View {
             }
           }
 
-          Text("Used to write the summary and topics for each finished meeting. Default Model uses whichever model Codex runs by default.")
+          Text("Used to write the summary and topics for each finished meeting. Default Model uses whichever model ChatGPT runs by default.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

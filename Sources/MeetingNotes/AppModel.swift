@@ -1120,7 +1120,7 @@ final class AppModel {
         let (document, folder) = try await store.completedMeeting(id: meeting.id)
         await openMeetingInCodex(document: document, folder: folder, startNewTask: startNewTask)
       } catch {
-        reportError("Could not open the meeting in Codex: \(error.localizedDescription)")
+        reportError("Could not open the meeting in ChatGPT: \(error.localizedDescription)")
       }
     }
   }
@@ -1161,7 +1161,7 @@ final class AppModel {
       let url = CodexThreadService.threadURL(threadID)
     {
       NSWorkspace.shared.open(url)
-      showTransientStatus("Opened the existing Codex task")
+      showTransientStatus("Opened the existing ChatGPT thread")
       return
     }
 
@@ -1174,7 +1174,7 @@ final class AppModel {
     // unreachable a blocking flush eats SSH timeouts for every queued folder
     // and the Discuss button spins for minutes. Sync catches up on its own.
     Task { await remoteSync.flush() }
-    statusText = hadTask ? "Starting a new Codex task…" : "Creating Codex task…"
+    statusText = hadTask ? "Starting a new ChatGPT thread…" : "Creating ChatGPT thread…"
     do {
       let threadID = try await CodexThreadService.createThread(
         for: context,
@@ -1183,16 +1183,16 @@ final class AppModel {
         reasoningEffort: CodexPromptSettingsStore.loadReasoningEffort())
       try await store.setCodexThreadID(threadID, for: document.id)
       guard let url = CodexThreadService.threadURL(threadID) else {
-        throw CodexThreadService.ServiceError.protocolError("The task link was invalid.")
+        throw CodexThreadService.ServiceError.protocolError("The thread link was invalid.")
       }
       NSWorkspace.shared.open(url)
       showTransientStatus(
         hadTask
-          ? "New Codex task created; the earlier one is no longer linked"
-          : "Codex task created for this meeting")
+          ? "New ChatGPT thread created; the earlier one is no longer linked"
+          : "ChatGPT thread created for this meeting")
       showCodexProjectHintIfNeeded(projectFolder: context.projectFolder)
     } catch {
-      reportError("Could not create the Codex task: \(error.localizedDescription)")
+      reportError("Could not create the ChatGPT thread: \(error.localizedDescription)")
     }
   }
 
@@ -1253,15 +1253,15 @@ final class AppModel {
     defaults.set(true, forKey: Self.codexProjectHintShownKey)
 
     let alert = NSAlert()
-    alert.messageText = "See all meeting tasks in Codex"
+    alert.messageText = "See all meeting threads in ChatGPT"
     alert.informativeText = """
-      Meeting tasks open in Codex right away, but they are only grouped in the \
+      Meeting threads open in ChatGPT right away, but they are only grouped in the \
       sidebar once the meeting archive folder is added as a project.
 
-      In Codex, open this folder once as a project:
+      In ChatGPT, open this folder once as a project:
       \(projectFolder.path)
 
-      Make sure Codex is in Codex mode, not Work mode — in Work mode folders \
+      Make sure ChatGPT is in Codex mode, not Work mode — in Work mode folders \
       do not appear as projects.
       """
     alert.alertStyle = .informational

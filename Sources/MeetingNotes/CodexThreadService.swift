@@ -168,17 +168,17 @@ enum CodexThreadService {
     var errorDescription: String? {
       switch self {
       case .appNotInstalled:
-        "Codex is not installed on this Mac."
+        "ChatGPT is not installed on this Mac."
       case .projectFolderUnavailable:
         "The local meeting archive is unavailable."
       case .protocolError(let detail):
-        "Codex could not create the task: \(detail)"
+        "ChatGPT could not create the thread: \(detail)"
       case .processExited(let detail):
-        detail.isEmpty ? "Codex stopped before the task was created." : detail
+        detail.isEmpty ? "ChatGPT stopped before the thread was created." : detail
       case .timedOut:
-        "Codex did not respond in time. Please try again."
+        "ChatGPT did not respond in time. Please try again."
       case .turnFailed(let detail):
-        detail.isEmpty ? "The Codex task could not finish its work." : detail
+        detail.isEmpty ? "The ChatGPT thread could not finish its work." : detail
       }
     }
   }
