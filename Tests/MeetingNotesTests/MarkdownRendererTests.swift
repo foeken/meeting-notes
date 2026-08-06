@@ -45,6 +45,22 @@ import Testing
   #expect(TranscriptionEngineSettingsStore.load(from: defaults) == .openAI)
 }
 
+@Test func linearUpsamplerProducesThreeOutputsPerTwoInputs() {
+  var upsampler = LinearUpsampler()
+  // Feed 32 000 samples (2 s at 16 kHz) in uneven chunks; expect ~48 000 out.
+  var total = 0
+  var offset = 0
+  let input = [Int16](repeating: 1_000, count: 32_000)
+  for chunkSize in [7_000, 12_345, 100, 12_555] {
+    total += upsampler.process(Array(input[offset..<(offset + chunkSize)])).count
+    offset += chunkSize
+  }
+  #expect(abs(total - 48_000) <= 3)
+  // A constant signal must stay constant through interpolation.
+  var flat = LinearUpsampler()
+  #expect(Set(flat.process([Int16](repeating: 500, count: 100))) == [500])
+}
+
 @Test func fillerWordFilterRemovesPausesWithoutDamagingWords() {
   #expect(FillerWordFilter.apply("So uh I was thinking um about this") == "So I was thinking about this")
   #expect(FillerWordFilter.apply("Uh, um, the answer is yes") == "The answer is yes")

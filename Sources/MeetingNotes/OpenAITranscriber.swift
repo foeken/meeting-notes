@@ -230,6 +230,40 @@ enum OpenAITranscriber {
   }
 }
 
+/// Linear-interpolation upsampler from 16 kHz capture audio to the 24 kHz
+/// minimum the realtime API accepts (2 input samples -> 3 output samples).
+/// Keeps one sample plus fractional phase so chunk boundaries stay continuous.
+struct LinearUpsampler {
+  private var previous: Int16?
+  private var phase = 0.0
+  private let step = 2.0 / 3.0
+
+  mutating func process(_ samples: [Int16]) -> [Int16] {
+    guard !samples.isEmpty else { return [] }
+    let input: [Int16]
+    if let previous {
+      input = [previous] + samples
+    } else {
+      input = samples
+      phase = 0
+    }
+    var out: [Int16] = []
+    out.reserveCapacity(samples.count * 3 / 2 + 2)
+    var pos = phase
+    while Int(pos) + 1 < input.count {
+      let index = Int(pos)
+      let frac = pos - Double(index)
+      let a = Double(input[index])
+      let b = Double(input[index + 1])
+      out.append(Int16(clamping: Int(a + (b - a) * frac)))
+      pos += step
+    }
+    previous = input.last
+    phase = pos - Double(input.count - 1)
+    return out
+  }
+}
+
 /// One realtime transcription WebSocket per audio source. Emits the transcript
 /// of each server-VAD segment when it completes; deltas are ignored for a
 /// calmer live preview. The WAV capture remains the durable source of truth,
@@ -238,6 +272,7 @@ final class OpenAILiveSession: @unchecked Sendable {
   private let task: URLSessionWebSocketTask
   private let onTranscript: @Sendable (String) -> Void
   private var receiveTask: Task<Void, Never>?
+  private var upsampler = LinearUpsampler()
 
   init(apiKey: String, onTranscript: @escaping @Sendable (String) -> Void) {
     self.onTranscript = onTranscript
@@ -245,15 +280,15 @@ final class OpenAILiveSession: @unchecked Sendable {
     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     task = URLSession.shared.webSocketTask(with: request)
     task.resume()
-    // ponytail: rate 16000 matches our capture; docs only show 24000. If the
-    // server rejects it, resample 2:3 before append.
+    // The API requires rate >= 24000, so 16 kHz capture audio is upsampled
+    // 2:3 in append() before it is sent.
     sendJSON([
       "type": "session.update",
       "session": [
         "type": "transcription",
         "audio": [
           "input": [
-            "format": ["type": "audio/pcm", "rate": 16_000],
+            "format": ["type": "audio/pcm", "rate": 24_000],
             "transcription": ["model": OpenAITranscriber.liveModel],
           ]
         ],
@@ -263,8 +298,10 @@ final class OpenAILiveSession: @unchecked Sendable {
   }
 
   func append(_ samples: [Int16]) {
-    var data = Data(capacity: samples.count * MemoryLayout<Int16>.size)
-    samples.withUnsafeBufferPointer { data.append(Data(buffer: $0)) }
+    let upsampled = upsampler.process(samples)
+    guard !upsampled.isEmpty else { return }
+    var data = Data(capacity: upsampled.count * MemoryLayout<Int16>.size)
+    upsampled.withUnsafeBufferPointer { data.append(Data(buffer: $0)) }
     sendJSON(["type": "input_audio_buffer.append", "audio": data.base64EncodedString()])
   }
 
