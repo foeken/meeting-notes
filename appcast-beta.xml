@@ -6,6 +6,41 @@
         <description>Signed application updates for Meeting Notes, including beta builds.</description>
         <language>en</language>
         <item>
+            <title>1.3.0</title>
+            <pubDate>Thu, 06 Aug 2026 07:53:02 +0200</pubDate>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>1.3.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[## Meeting Notes 1.3.0
+
+### OpenAI transcription
+- New transcription engines: `gpt-transcribe` for final transcripts and `gpt-live-transcribe` for the live preview, selectable per path in Settings → Transcriptions.
+- New Credentials pane holds the OpenAI API key (stored in the Keychain) with a one-click test button. The OpenAI engine options only appear once a key is set.
+- Switch the live preview between on-device and OpenAI at any point during a meeting; the configured engine returns for the next meeting.
+- Live audio is upsampled to 24 kHz for the realtime API, and streamed transcripts arrive per sentence.
+
+### Live preview
+- The current sentence now grows in place and closes at punctuation, so the preview flows continuously with readable lines instead of chunk fragments.
+- Speaker labels are no longer shown before each preview line.
+
+### Meeting threads
+- All user-facing "Codex" wording is now "ChatGPT", and thread models are picked from ChatGPT's live model list again.
+- The summary model picker moved to the Summaries pane.
+
+### Settings
+- The sidebar groups ChatGPT, Tana, and Hooks under Integrations.
+- Ignored calendar events are managed as removable pills with an add field.
+- The Dictionary editor moved into the Transcriptions pane.
+- Assorted layout and copy cleanups throughout.
+
+### Fixes
+- Yesterday's calendar event title no longer lingers in the title box the next morning.
+- Grouped week-based archive folders and storage usage view (from the 1.3.0 betas).
+]]></description>
+            <enclosure url="https://github.com/foeken/meeting-notes/releases/download/v1.3.0/MeetingNotes-1.3.0.dmg" length="5405421" type="application/octet-stream" sparkle:edSignature="Og7tF9SK1UrInOvVaZnNgUPDiuySuZ90DAAiud1vI+8TmtSMRtpEA2LBqPsbjzGvdQV9olbseEY+W7Kpkr7EBA=="/>
+        </item>
+        <item>
             <title>1.3.0-beta.1</title>
             <pubDate>Fri, 31 Jul 2026 15:13:22 +0200</pubDate>
             <sparkle:channel>beta</sparkle:channel>
@@ -14,30 +49,6 @@
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://github.com/foeken/meeting-notes/releases/download/v1.3.0-beta.1/MeetingNotes-1.3.0-beta.1.dmg" length="5306073" type="application/octet-stream" sparkle:edSignature="NOC8xGPpM6n9UnzIqJCToZ7aD1gRbmzjoGhY7NX0yV3f5zhUSYepem6K1iurpLxqhjsXjiPjmMih+gT9iXVfDg=="/>
-        </item>
-        <item>
-            <title>1.2.0</title>
-            <pubDate>Tue, 28 Jul 2026 19:16:31 +0200</pubDate>
-            <sparkle:version>6</sparkle:version>
-            <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## Meeting Notes 1.2
-
-### Update channel
-
-- **Choose stable or beta updates** — a new **Update channel** setting under
-  **Settings → General** decides which builds this Mac installs.
-- **Stable** is the default and installs released versions only. Nothing
-  changes for existing installations.
-- **Beta** installs test builds as they appear, and still receives every
-  stable release, so a beta tester is never left behind on an ageing build.
-- Switching back to stable keeps the beta already installed; the next stable
-  release replaces it.
-- Beta builds are signed and notarized exactly like stable ones. They are
-  simply tested less.
-]]></description>
-            <enclosure url="https://github.com/foeken/meeting-notes/releases/download/v1.2.0/MeetingNotes-1.2.0.dmg" length="5136298" type="application/octet-stream" sparkle:edSignature="SXkyq3L99IKiYiZb9DrqjBp4ijWVcBH5GVH11eW9judEieqQ3zbw4ayRtBSn2GBJO/nwWGb3CtEGYTMeFhbkBw=="/>
         </item>
     </channel>
 </rss>
