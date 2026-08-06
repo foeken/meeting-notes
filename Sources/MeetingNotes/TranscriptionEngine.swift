@@ -246,6 +246,10 @@ actor LiveTranscriptionEngine {
     var emittedThrough: TimeInterval = 0
     var transcript = ""
     var queue = SerialAudioBatchQueue()
+    // Delta text held back until a sentence boundary, so the preview shows
+    // whole sentences instead of chunk-sized fragments.
+    var pendingText = ""
+    var pendingStart: TimeInterval?
   }
 
   private let transcriber: NemotronTranscriber
@@ -382,6 +386,22 @@ actor LiveTranscriptionEngine {
     running = false
     sessionID = nil
     openAIKey = nil
+    // Flush any sentence still held back so the live document keeps every
+    // word up to the stop click.
+    if let onTurn {
+      for source in [TranscriptTurn.Source.microphone, .system] {
+        let state = states[source, default: StreamState()]
+        let text = state.pendingText
+        guard !text.isEmpty else { continue }
+        let turn = TranscriptTurn(
+          start: state.pendingStart ?? max(0, state.emittedThrough - 1.12),
+          end: state.emittedThrough,
+          speaker: "Unknown", text: text, source: source)
+        states[source, default: StreamState()].pendingText = ""
+        states[source, default: StreamState()].pendingStart = nil
+        Task { await onTurn(turn) }
+      }
+    }
     for source in [TranscriptTurn.Source.microphone, .system] {
       states[source, default: StreamState()].queue.cancel()
       states[source, default: StreamState()].manager = nil
@@ -423,11 +443,23 @@ actor LiveTranscriptionEngine {
       states[source] = state
       return
     }
-    let turn = TranscriptTurn(
-      start: max(state.emittedThrough, end - 1.12), end: end,
-      speaker: "Unknown",
-      text: text, source: source)
+    if state.pendingStart == nil {
+      state.pendingStart = max(state.emittedThrough, end - 1.12)
+    }
+    state.pendingText = state.pendingText.isEmpty ? text : state.pendingText + " " + text
     state.emittedThrough = end
+    // ponytail: 300-char cap flushes ASR output that never lands punctuation.
+    guard OpenAILiveSession.shouldFlush(state.pendingText) || state.pendingText.count > 300
+    else {
+      states[source] = state
+      return
+    }
+    let turn = TranscriptTurn(
+      start: state.pendingStart ?? max(0, end - 1.12), end: end,
+      speaker: "Unknown",
+      text: state.pendingText, source: source)
+    state.pendingText = ""
+    state.pendingStart = nil
     states[source] = state
     await onTurn?(turn)
   }
