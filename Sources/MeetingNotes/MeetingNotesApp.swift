@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   static let sharedModel = AppModel()
 
   private var uiTestWindow: NSWindow?
+  private var liveTranscriptOverlay: LiveTranscriptOverlay?
   /// Sparkle holds its delegate weakly, so this must stay owned here.
   private let updaterDelegate = UpdateChannelDelegate()
   private lazy var updaterController = SPUStandardUpdaterController(
@@ -96,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     guard ProcessInfo.processInfo.arguments.contains("--ui-test") else {
       showWelcomeIfNeeded()
+      liveTranscriptOverlay = LiveTranscriptOverlay(model: Self.sharedModel)
       return
     }
     NSApp.setActivationPolicy(.regular)

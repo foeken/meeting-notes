@@ -28,6 +28,7 @@ final class AppModel {
   /// True while the running meeting's live preview uses the OpenAI realtime
   /// API — either configured, or upgraded mid-meeting. Resets on stop.
   var liveUsingOpenAI = false
+  var liveTranscriptOverlayEnabled = LiveTranscriptOverlaySettingsStore.load()
 
   /// The live engine switch only makes sense while recording with a key set.
   var canSwitchLivePreview: Bool {
@@ -425,6 +426,12 @@ final class AppModel {
       enabled
         ? "Live transcription switched to OpenAI for this meeting"
         : "Live transcription switched to on-device for this meeting")
+  }
+
+  func setLiveTranscriptOverlayEnabled(_ enabled: Bool) {
+    guard liveTranscriptOverlayEnabled != enabled else { return }
+    liveTranscriptOverlayEnabled = enabled
+    LiveTranscriptOverlaySettingsStore.save(enabled)
   }
 
   func saveOpenAITranscribeKey() {

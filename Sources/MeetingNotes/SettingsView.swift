@@ -1072,6 +1072,26 @@ private struct TranscriptionsSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
+            Text("Floating subtitles")
+              .font(.body.weight(.medium))
+            Text("Show the live transcript in a small bar above the Dock while recording.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          Spacer()
+          Toggle("Floating subtitles", isOn: Binding(
+            get: { model.liveTranscriptOverlayEnabled },
+            set: { model.setLiveTranscriptOverlayEnabled($0) }
+          ))
+          .labelsHidden()
+          .toggleStyle(.switch)
+        }
+
+        Divider()
+
+        HStack(spacing: 16) {
+          VStack(alignment: .leading, spacing: 4) {
             Text("Dictionary")
               .font(.body.weight(.medium))
             Text("Help Meeting Notes recognize names and specialist terminology.")
