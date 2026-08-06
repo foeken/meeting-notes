@@ -273,6 +273,17 @@ final class OpenAILiveSession: @unchecked Sendable {
   private let onTranscript: @Sendable (String) -> Void
   private var receiveTask: Task<Void, Never>?
   private var upsampler = LinearUpsampler()
+  /// Delta text accumulated since the last flush. Only touched from the
+  /// receive loop task, so no lock is needed.
+  private var pending = ""
+
+  /// gpt-live-transcribe is append-only: it streams `.delta` events and never
+  /// sends a `completed` transcript. Deltas are batched into sentence-sized
+  /// pieces so the live preview gets readable turns instead of single words.
+  static func shouldFlush(_ text: String) -> Bool {
+    guard let last = text.trimmingCharacters(in: .whitespaces).last else { return false }
+    return ".!?…".contains(last)
+  }
 
   init(apiKey: String, onTranscript: @escaping @Sendable (String) -> Void) {
     self.onTranscript = onTranscript
@@ -307,7 +318,15 @@ final class OpenAILiveSession: @unchecked Sendable {
 
   func close() {
     receiveTask?.cancel()
+    flushPending()
     task.cancel(with: .goingAway, reason: nil)
+  }
+
+  private func flushPending() {
+    let text = pending.trimmingCharacters(in: .whitespaces)
+    pending = ""
+    guard !text.isEmpty else { return }
+    onTranscript(text)
   }
 
   private func sendJSON(_ object: [String: Any]) {
@@ -329,9 +348,18 @@ final class OpenAILiveSession: @unchecked Sendable {
       guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
         let type = json["type"] as? String
       else { continue }
-      if type == "conversation.item.input_audio_transcription.completed",
-        let transcript = json["transcript"] as? String, !transcript.isEmpty {
-        onTranscript(transcript)
+      switch type {
+      case "conversation.item.input_audio_transcription.delta":
+        if let delta = json["delta"] as? String, !delta.isEmpty {
+          pending += delta
+          if Self.shouldFlush(pending) { flushPending() }
+        }
+      case "conversation.item.input_audio_transcription.completed":
+        // Sent by models that finalize items; the deltas already carried the
+        // text, so this only flushes whatever remains un-terminated.
+        flushPending()
+      default:
+        break
       }
     }
   }

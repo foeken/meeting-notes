@@ -61,6 +61,15 @@ import Testing
   #expect(Set(flat.process([Int16](repeating: 500, count: 100))) == [500])
 }
 
+@Test func openAILiveSessionFlushesOnSentenceBoundaries() {
+  #expect(OpenAILiveSession.shouldFlush("Hello there."))
+  #expect(OpenAILiveSession.shouldFlush("Really?"))
+  #expect(OpenAILiveSession.shouldFlush("Stop! "))
+  #expect(!OpenAILiveSession.shouldFlush("Hello there"))
+  #expect(!OpenAILiveSession.shouldFlush("uh,"))
+  #expect(!OpenAILiveSession.shouldFlush(""))
+}
+
 @Test func fillerWordFilterRemovesPausesWithoutDamagingWords() {
   #expect(FillerWordFilter.apply("So uh I was thinking um about this") == "So I was thinking about this")
   #expect(FillerWordFilter.apply("Uh, um, the answer is yes") == "The answer is yes")
