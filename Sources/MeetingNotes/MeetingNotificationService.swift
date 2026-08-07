@@ -7,11 +7,16 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
 
   var onStartRecording: (@MainActor @Sendable () -> Void)?
   var onDismiss: (@MainActor @Sendable () -> Void)?
+  var onStopRecording: (@MainActor @Sendable () -> Void)?
 
   private let notificationIdentifier = "meeting-detected"
   private let categoryIdentifier = "meeting-detected-actions"
   private let startRecordingActionIdentifier = "start-recording"
   private let dismissActionIdentifier = "not-now"
+  private let endedIdentifier = "meeting-ended"
+  private let endedCategoryIdentifier = "meeting-ended-actions"
+  private let stopRecordingActionIdentifier = "stop-recording"
+  private let keepRecordingActionIdentifier = "keep-recording"
   private let center = UNUserNotificationCenter.current()
   private var notificationArmed = true
   private var rearmTask: Task<Void, Never>?
@@ -25,12 +30,47 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
     let dismiss = UNNotificationAction(
       identifier: dismissActionIdentifier,
       title: "Not Now")
+    let stopRecording = UNNotificationAction(
+      identifier: stopRecordingActionIdentifier,
+      title: "Stop Recording")
+    let keepRecording = UNNotificationAction(
+      identifier: keepRecordingActionIdentifier,
+      title: "Keep Recording")
     center.setNotificationCategories([
       UNNotificationCategory(
         identifier: categoryIdentifier,
         actions: [startRecording, dismiss],
-        intentIdentifiers: [])
+        intentIdentifiers: []),
+      UNNotificationCategory(
+        identifier: endedCategoryIdentifier,
+        actions: [stopRecording, keepRecording],
+        intentIdentifiers: []),
     ])
+  }
+
+  /// The video call ended while a manually started recording is still
+  /// running: suggest stopping instead of stopping automatically.
+  func suggestStopAfterMeetingEnded(app: String) {
+    Task { @MainActor in
+      do {
+        let granted = try await center.requestAuthorization(options: [.alert, .sound])
+        guard granted else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "\(app) meeting ended"
+        content.body = "Meeting Notes is still recording."
+        content.sound = .default
+        content.categoryIdentifier = endedCategoryIdentifier
+        try await center.add(UNNotificationRequest(
+          identifier: endedIdentifier, content: content, trigger: nil))
+      } catch {
+        // The menu bar still shows the recording state if notifications fail.
+      }
+    }
+  }
+
+  func clearStopSuggestion() {
+    center.removeDeliveredNotifications(withIdentifiers: [endedIdentifier])
+    center.removePendingNotificationRequests(withIdentifiers: [endedIdentifier])
   }
 
   func showDetectedMeeting(app: String) {
@@ -112,6 +152,10 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
         onStartRecording?()
       case dismissActionIdentifier:
         onDismiss?()
+      case stopRecordingActionIdentifier:
+        onStopRecording?()
+      case keepRecordingActionIdentifier:
+        break
       default:
         break
       }

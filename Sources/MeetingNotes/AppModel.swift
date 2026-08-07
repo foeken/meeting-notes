@@ -232,6 +232,10 @@ final class AppModel {
       MeetingNotificationService.shared.onDismiss = { [weak self] in
         self?.dismissDetectedMeeting()
       }
+      MeetingNotificationService.shared.onStopRecording = { [weak self] in
+        guard let self, self.state == .recording || self.state == .paused else { return }
+        Task { await self.stop() }
+      }
       meetingActivityMonitor.onDetectedAppChanged = { [weak self] app in
         self?.handleDetectedMeetingApp(app)
       }
@@ -507,15 +511,24 @@ final class AppModel {
   }
 
   private func handleDetectedMeetingApp(_ app: String?) {
+    let previousApp = latestDetectedMeetingApp
     latestDetectedMeetingApp = app
     updateMeetingAutoStop()
     if app == nil {
       MeetingNotificationService.shared.meetingEnded()
+      // A manually started recording has no recordingMeetingApp, so the
+      // auto-stop above does not cover it. Suggest stopping instead.
+      if state == .recording || state == .paused,
+        recordingMeetingApp == nil, let previousApp
+      {
+        MeetingNotificationService.shared.suggestStopAfterMeetingEnded(app: previousApp)
+      }
       guard state == .idle else { return }
       detectedMeetingApp = nil
       if statusText.hasSuffix(" meeting detected") { statusText = "Ready" }
       return
     }
+    MeetingNotificationService.shared.clearStopSuggestion()
 
     guard state == .idle else { return }
     detectedMeetingApp = app
@@ -1963,6 +1976,7 @@ final class AppModel {
     meetingAutoStopScheduler.cancel()
     recordingMeetingApp = nil
     recordingWakeLock.release()
+    MeetingNotificationService.shared.clearStopSuggestion()
     // A title typed during the recording must survive even when the user
     // never pressed Return in the title field.
     let draftTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
