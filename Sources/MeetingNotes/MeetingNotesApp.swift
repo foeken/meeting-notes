@@ -98,6 +98,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     guard ProcessInfo.processInfo.arguments.contains("--ui-test") else {
       showWelcomeIfNeeded()
       liveTranscriptOverlay = LiveTranscriptOverlay(model: Self.sharedModel)
+      // The lazy updater only exists once something touches it. Without this,
+      // scheduled background update checks never started for users who never
+      // clicked "Check for Updates…" — they stayed on old builds forever.
+      _ = updaterController
       return
     }
     NSApp.setActivationPolicy(.regular)
