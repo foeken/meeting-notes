@@ -27,6 +27,13 @@ final class OptionKeyMonitor {
 }
 
 struct MenuBarView: View {
+  /// "1.3.0 (8)" from the bundle, so the menu always shows the running build.
+  static let appVersion: String = {
+    let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+      as? String ?? "?"
+    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+    return "\(short) (\(build))"
+  }()
   @Bindable var model: AppModel
   @Environment(\.openSettings) private var openSettings
   @Environment(\.openWindow) private var openWindow
@@ -607,6 +614,8 @@ struct MenuBarView: View {
         }
         Divider()
         Button("Quit Meeting Notes", systemImage: "power") { NSApplication.shared.terminate(nil) }
+        Divider()
+        Text("Version \(Self.appVersion)")
       } label: {
         ZStack {
           RoundedRectangle(cornerRadius: 10, style: .continuous)
