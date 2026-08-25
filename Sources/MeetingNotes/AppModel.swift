@@ -1404,13 +1404,18 @@ final class AppModel {
   /// Deleting audio is irreversible, so it is confirmed first.
   func requestAudioCleanup() {
     guard !audioCleanupInProgress else { return }
-    let audioBytes = storageUsage?.audioBytes ?? 0
+    let finishedAudioBytes = storageUsage?.archiveAudioBytes ?? 0
+    guard finishedAudioBytes > 0 else { return }
+    let recoveryAudioBytes = storageUsage?.recoveryAudioBytes ?? 0
+    let recoveryNote = recoveryAudioBytes > 0
+      ? " Recovery audio for unfinished captures is kept for recovery."
+      : ""
     let alert = NSAlert()
     alert.messageText = "Delete meeting audio?"
     alert.informativeText = """
-      Removes \(ByteCountFormatter.string(fromByteCount: audioBytes, countStyle: .file)) \
-      of audio recordings from finished meetings, on this Mac and the synced \
-      archive. Notes and transcripts are kept. This cannot be undone.
+      Removes \(ByteCountFormatter.string(fromByteCount: finishedAudioBytes, countStyle: .file)) \
+      of finished-meeting audio from this Mac and the synced archive. Notes and \
+      transcripts are kept.\(recoveryNote) This cannot be undone.
       """
     alert.alertStyle = .warning
     alert.addButton(withTitle: "Delete Audio")
@@ -1429,7 +1434,8 @@ final class AppModel {
     Task {
       let freed = await store.cleanUpAudioFiles()
       await remoteSync.flush()
-      storageUsage = await store.storageUsage()
+      let refreshedUsage = await store.storageUsage()
+      storageUsage = refreshedUsage
       audioCleanupInProgress = false
       if freed > 0 {
         let formatted = ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)
@@ -1438,8 +1444,13 @@ final class AppModel {
         } else {
           audioCleanupStatusText = "Freed \(formatted)."
         }
+      } else if refreshedUsage.recoveryAudioBytes > 0 {
+        let recovery = ByteCountFormatter.string(
+          fromByteCount: refreshedUsage.recoveryAudioBytes, countStyle: .file)
+        audioCleanupStatusText =
+          "No finished-meeting audio to remove. \(recovery) of recovery audio is kept for unfinished captures."
       } else {
-        audioCleanupStatusText = "No removable audio found."
+        audioCleanupStatusText = "No finished-meeting audio to remove."
       }
     }
   }

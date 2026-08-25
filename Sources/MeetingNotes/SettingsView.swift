@@ -696,7 +696,12 @@ private struct StorageSettingsPane: View {
             VStack(alignment: .leading, spacing: 4) {
               Text("Clean up audio")
                 .font(.body.weight(.medium))
-              Text("Deletes audio recordings of finished meetings. Recovery audio for unfinished captures is kept.")
+              Text(
+                usage.archiveAudioBytes > 0
+                  ? "Deletes audio recordings of finished meetings. Recovery audio for unfinished captures is kept."
+                  : usage.recoveryAudioBytes > 0
+                    ? "Finished-meeting audio is already clear. Recovery audio for unfinished captures is kept for recovery."
+                    : "No finished-meeting audio is stored.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -705,7 +710,7 @@ private struct StorageSettingsPane: View {
             Button(model.audioCleanupInProgress ? "Cleaning up…" : "Clean Up…") {
               model.requestAudioCleanup()
             }
-            .disabled(model.audioCleanupInProgress || usage.audioBytes == 0)
+            .disabled(model.audioCleanupInProgress || usage.archiveAudioBytes == 0)
           }
 
           if !model.audioCleanupStatusText.isEmpty {
@@ -825,8 +830,13 @@ private struct StorageUsageBar: View {
       HStack(spacing: 16) {
         legendEntry(color: Color.accentColor, label: "Notes and transcripts",
           value: formatted(usage.documentBytes))
-        if usage.audioBytes > 0 {
-          legendEntry(color: .orange, label: "Audio", value: formatted(usage.audioBytes))
+        if usage.archiveAudioBytes > 0 {
+          legendEntry(color: .orange, label: "Finished audio", value: formatted(usage.archiveAudioBytes))
+        }
+        if usage.recoveryAudioBytes > 0 {
+          legendEntry(
+            color: .orange.opacity(0.55), label: "Recovery audio",
+            value: formatted(usage.recoveryAudioBytes))
         }
         Spacer()
         Text(formatted(usage.totalBytes) + " total")
