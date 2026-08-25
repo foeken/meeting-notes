@@ -168,6 +168,8 @@ final class AppModel {
   private var stoppedMeetingGracePeriods: Set<UUID> = []
   private var pendingMeetingSummaries: [UUID: TodayMeetingSummary] = [:]
   private var activeRecordingMeetingID: UUID?
+  private let recordingActivity = RecordingActivityMonitor()
+  private var silenceAutoPauseTriggered = false
 
   init() {
     let archiveConfiguration = ArchiveSettingsStore.load()
@@ -235,6 +237,10 @@ final class AppModel {
       MeetingNotificationService.shared.onStopRecording = { [weak self] in
         guard let self, self.state == .recording || self.state == .paused else { return }
         Task { await self.stop() }
+      }
+      MeetingNotificationService.shared.onResumeRecording = { [weak self] in
+        guard let self, self.state == .paused else { return }
+        Task { await self.resume() }
       }
       meetingActivityMonitor.onDetectedAppChanged = { [weak self] app in
         self?.handleDetectedMeetingApp(app)
@@ -1815,6 +1821,9 @@ final class AppModel {
       let startedDocument = try await store.begin(
         title: cleanTitle.isEmpty ? "Meeting" : cleanTitle, calendar: calendarMetadata)
       activeRecordingMeetingID = startedDocument.id
+      recordingActivity.reset()
+      silenceAutoPauseTriggered = false
+      let activityMonitor = recordingActivity
       if let startedFolder = await store.currentFolder() {
         autoCreateCodexThreadIfEnabled(document: startedDocument, folder: startedFolder)
       }
@@ -1853,9 +1862,11 @@ final class AppModel {
         }
       }
       microphone.onSamplesAtPosition = { samples, position in
+        activityMonitor.observe(samples)
         liveFeedContinuation.yield((samples, .microphone, position))
       }
       systemAudio.onSamplesAtPosition = { samples, position in
+        activityMonitor.observe(samples)
         liveFeedContinuation.yield((samples, .system, position))
       }
       self.liveFeedContinuation = liveFeedContinuation
@@ -1891,7 +1902,7 @@ final class AppModel {
     }
   }
 
-  private func pause(userInitiated: Bool) async {
+  private func pause(userInitiated: Bool, status: String? = nil) async {
     guard state == .recording else { return }
     recordingWakeLock.release()
     elapsed = captureClock.pause()
@@ -1903,11 +1914,12 @@ final class AppModel {
     await systemAudio.pause()
     try? await store.heartbeat(captureState: "paused")
     state = .paused
-    statusText = userInitiated ? "Paused" : "Paused while Mac sleeps"
+    statusText = status ?? (userInitiated ? "Paused" : "Paused while Mac sleeps")
   }
 
   private func resume() async {
     guard state == .paused else { return }
+    MeetingNotificationService.shared.clearStopSuggestion()
     state = .starting
     statusText = "Resuming…"
     do {
@@ -1922,6 +1934,8 @@ final class AppModel {
         throw error
       }
       pausedBySleep = false
+      recordingActivity.reset()
+      silenceAutoPauseTriggered = false
       startTimer()
       recordingWakeLock.acquire()
       state = .recording
@@ -1967,6 +1981,16 @@ final class AppModel {
         if self.elapsed - self.lastHeartbeatElapsed >= 15 {
           self.lastHeartbeatElapsed = self.elapsed
           try? await self.store.heartbeat(captureState: "recording")
+        }
+        if self.state == .recording,
+          !self.silenceAutoPauseTriggered,
+          self.recordingActivity.isQuiet()
+        {
+          self.silenceAutoPauseTriggered = true
+          await self.pause(
+            userInitiated: false,
+            status: "Paused after 15 minutes without meaningful audio")
+          MeetingNotificationService.shared.showRecordingPausedAfterSilence()
         }
       }
     }

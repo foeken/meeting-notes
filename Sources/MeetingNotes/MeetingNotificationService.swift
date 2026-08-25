@@ -8,15 +8,20 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
   var onStartRecording: (@MainActor @Sendable () -> Void)?
   var onDismiss: (@MainActor @Sendable () -> Void)?
   var onStopRecording: (@MainActor @Sendable () -> Void)?
+  var onResumeRecording: (@MainActor @Sendable () -> Void)?
 
   private let notificationIdentifier = "meeting-detected"
   private let categoryIdentifier = "meeting-detected-actions"
   private let startRecordingActionIdentifier = "start-recording"
   private let dismissActionIdentifier = "not-now"
   private let endedIdentifier = "meeting-ended"
+  private let pausedIdentifier = "recording-paused"
   private let endedCategoryIdentifier = "meeting-ended-actions"
+  private let pausedCategoryIdentifier = "recording-paused-actions"
   private let stopRecordingActionIdentifier = "stop-recording"
   private let keepRecordingActionIdentifier = "keep-recording"
+  private let resumeRecordingActionIdentifier = "resume-recording"
+  private let keepPausedActionIdentifier = "keep-paused"
   private let center = UNUserNotificationCenter.current()
   private var notificationArmed = true
   private var rearmTask: Task<Void, Never>?
@@ -36,6 +41,12 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
     let keepRecording = UNNotificationAction(
       identifier: keepRecordingActionIdentifier,
       title: "Keep Recording")
+    let resumeRecording = UNNotificationAction(
+      identifier: resumeRecordingActionIdentifier,
+      title: "Resume Recording")
+    let keepPaused = UNNotificationAction(
+      identifier: keepPausedActionIdentifier,
+      title: "Keep Paused")
     center.setNotificationCategories([
       UNNotificationCategory(
         identifier: categoryIdentifier,
@@ -44,6 +55,10 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
       UNNotificationCategory(
         identifier: endedCategoryIdentifier,
         actions: [stopRecording, keepRecording],
+        intentIdentifiers: []),
+      UNNotificationCategory(
+        identifier: pausedCategoryIdentifier,
+        actions: [resumeRecording, keepPaused],
         intentIdentifiers: []),
     ])
   }
@@ -68,9 +83,28 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
     }
   }
 
+  func showRecordingPausedAfterSilence() {
+    Task { @MainActor in
+      do {
+        let granted = try await center.requestAuthorization(options: [.alert, .sound])
+        guard granted else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Meeting paused"
+        content.body = "No meaningful audio was detected for 15 minutes."
+        content.sound = .default
+        content.categoryIdentifier = pausedCategoryIdentifier
+        try await center.add(UNNotificationRequest(
+          identifier: pausedIdentifier, content: content, trigger: nil))
+      } catch {
+        // The menu bar still shows the paused state if notifications fail.
+      }
+    }
+  }
+
   func clearStopSuggestion() {
-    center.removeDeliveredNotifications(withIdentifiers: [endedIdentifier])
-    center.removePendingNotificationRequests(withIdentifiers: [endedIdentifier])
+    let identifiers = [endedIdentifier, pausedIdentifier]
+    center.removeDeliveredNotifications(withIdentifiers: identifiers)
+    center.removePendingNotificationRequests(withIdentifiers: identifiers)
   }
 
   func showDetectedMeeting(app: String) {
@@ -155,6 +189,10 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
       case stopRecordingActionIdentifier:
         onStopRecording?()
       case keepRecordingActionIdentifier:
+        break
+      case resumeRecordingActionIdentifier:
+        onResumeRecording?()
+      case keepPausedActionIdentifier:
         break
       default:
         break

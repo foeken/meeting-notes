@@ -117,3 +117,50 @@ enum WavFile {
     return result
   }
 }
+
+/// Tracks recent signal without retaining the recording or touching its file.
+final class RecordingActivityMonitor: @unchecked Sendable {
+  static let autoPauseDelay: TimeInterval = 15 * 60
+
+  private let lock = NSLock()
+  private var lastMeaningfulAt = Date.distantPast
+
+  func reset(at date: Date = Date()) {
+    lock.lock()
+    lastMeaningfulAt = date
+    lock.unlock()
+  }
+
+  func observe(_ samples: [Int16], at date: Date = Date()) {
+    guard Self.hasMeaningfulSignal(samples) else { return }
+    lock.lock()
+    lastMeaningfulAt = max(lastMeaningfulAt, date)
+    lock.unlock()
+  }
+
+  func isQuiet(for duration: TimeInterval = autoPauseDelay, at date: Date = Date()) -> Bool {
+    lock.lock()
+    let last = lastMeaningfulAt
+    lock.unlock()
+    return date.timeIntervalSince(last) >= duration
+  }
+
+  private static func hasMeaningfulSignal(_ samples: [Int16]) -> Bool {
+    let windowSize = Int(WavFile.sampleRate) / 10
+    guard samples.count >= windowSize / 2 else { return false }
+    var index = 0
+    while index < samples.count {
+      let end = min(index + windowSize, samples.count)
+      let count = end - index
+      guard count >= windowSize / 2 else { break }
+      var energy = 0.0
+      for sample in samples[index..<end] {
+        let value = Double(sample)
+        energy += value * value
+      }
+      if energy / Double(count) >= 48.0 * 48.0 { return true }
+      index = end
+    }
+    return false
+  }
+}

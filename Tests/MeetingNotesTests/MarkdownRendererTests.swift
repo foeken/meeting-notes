@@ -827,6 +827,17 @@ import Testing
   #expect(FinalTranscriptionEngine.hasUsableAudio(speechURL))
 }
 
+@Test func recordingActivityMonitorPausesOnlyAfterTheQuietPeriod() {
+  let monitor = RecordingActivityMonitor()
+  let start = Date(timeIntervalSince1970: 100)
+  monitor.reset(at: start)
+  #expect(!monitor.isQuiet(for: 900, at: start.addingTimeInterval(899)))
+  #expect(monitor.isQuiet(for: 900, at: start.addingTimeInterval(900)))
+
+  monitor.observe(Array(repeating: 1_000, count: 1_600), at: start.addingTimeInterval(900))
+  #expect(!monitor.isQuiet(for: 900, at: start.addingTimeInterval(900)))
+}
+
 @Test func finalTranscriptionKeepsSegmentsAsNeutralUnknownTurns() {
   let result = NemotronTranscriber.Result(
     text: "First turn. Second turn.", duration: 4,
@@ -2042,7 +2053,7 @@ import Testing
   #expect(FileManager.default.fileExists(atPath: archive.appending(path: "current.json").path))
 }
 
-@Test func localArchiveSyncIncludesAudioWhenRetentionIsEnabled() async throws {
+@Test func localArchiveSyncKeepsLiveAudioPrivateWhenRetentionIsEnabled() async throws {
   let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
@@ -2051,14 +2062,11 @@ import Testing
     configuration: .init(
       remoteSyncEnabled: false, host: "", path: "", localPath: archive.path, enabled: true,
       includeAudio: true))
-  let store = MeetingStore(root: spool, sync: sync)
+  let store = MeetingStore(root: spool, archiveRoot: archive, sync: sync)
   _ = try await store.begin(title: "Retained audio", calendar: nil)
   let folder = try #require(await store.currentFolder())
-  var sourceAudio = folder.appending(path: "microphone.wav")
+  let sourceAudio = folder.appending(path: "microphone.wav")
   try Data("private audio".utf8).write(to: sourceAudio)
-  var hiddenValues = URLResourceValues()
-  hiddenValues.isHidden = true
-  try sourceAudio.setResourceValues(hiddenValues)
 
   await sync.enqueue(folder: folder)
   await sync.flush()
@@ -2066,8 +2074,14 @@ import Testing
   let relative = folder.pathComponents.suffix(4).joined(separator: "/")
   let archived = archive.appending(path: relative)
   let archivedAudio = archived.appending(path: "microphone.wav")
-  #expect(FileManager.default.fileExists(atPath: archivedAudio.path))
-  #expect(try archivedAudio.resourceValues(forKeys: [.isHiddenKey]).isHidden == false)
+  #expect(!FileManager.default.fileExists(atPath: archivedAudio.path))
+
+  try await store.finalize(insights: nil)
+  await sync.enqueue(folder: try #require(await store.currentFolder()), runHookAfterSync: true)
+  await sync.flush()
+  let finishedFolder = try #require(await store.currentFolder())
+  let finishedAudio = finishedFolder.appending(path: "microphone.wav")
+  #expect(FileManager.default.fileExists(atPath: finishedAudio.path))
 }
 
 @Test func syncRetryDelayBacksOffExponentiallyWithACap() {

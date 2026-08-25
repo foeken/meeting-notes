@@ -584,6 +584,11 @@ actor RemoteSyncService {
     let tail = folder.pathComponents.suffix(4).joined(separator: "/")
     let archive = try localArchiveURL(for: config)
     let folderPath = folder.standardizedFileURL.path
+    let document = (try? Data(contentsOf: MeetingStore.stateFile(in: folder)))
+      .flatMap { try? JSONDecoder.meetingDecoder.decode(MeetingDocument.self, from: $0) }
+    // Live WAVs stay private until finalization. This prevents a long-running
+    // recording in an iCloud archive from producing CloudDocs staging copies.
+    let excludeAudio = document?.status != .complete
     // A finished meeting now lives *in* the archive, so there is usually no
     // local copy step at all. The copy leg only remains for a meeting still in
     // the spool (archive volume was unavailable at finalization), and it must
@@ -596,7 +601,8 @@ actor RemoteSyncService {
         // destination the very folder being synced; rsync with
         // --delete-excluded would then destroy the audio it excludes.
         if config.remoteSyncEnabled {
-          try await syncRemoteLeg(folder: folder, tail: tail, config: config)
+          try await syncRemoteLeg(
+            folder: folder, tail: tail, config: config, excludeAudio: excludeAudio)
         }
         return
       }
@@ -605,33 +611,34 @@ actor RemoteSyncService {
       // meeting.json makes the same meeting appear twice in the UI. Live
       // documents (live.md) still mirror so current-meeting questions keep
       // working during recording.
-      let document = (try? Data(contentsOf: folder.appending(path: MeetingStore.stateFileName)))
-        .flatMap { try? JSONDecoder.meetingDecoder.decode(MeetingDocument.self, from: $0) }
       let isComplete = document?.status == .complete
       try FileManager.default.createDirectory(at: localTarget, withIntermediateDirectories: true)
       try await sync(
         folder: folder, destination: localTarget.path + "/", remotely: false,
-        excludeState: !isComplete)
-      if config.includeAudio {
+        excludeState: !isComplete, excludeAudio: excludeAudio)
+      if config.includeAudio && isComplete {
         try Self.makeRetainedAudioVisible(in: localTarget)
       }
-    } else if config.includeAudio {
+    } else if config.includeAudio && document?.status == .complete {
       try Self.makeRetainedAudioVisible(in: folder)
     }
 
     if config.remoteSyncEnabled {
-      try await syncRemoteLeg(folder: folder, tail: tail, config: config)
+      try await syncRemoteLeg(
+        folder: folder, tail: tail, config: config, excludeAudio: excludeAudio)
     }
   }
 
-  private func syncRemoteLeg(folder: URL, tail: String, config: Configuration) async throws {
+  private func syncRemoteLeg(
+    folder: URL, tail: String, config: Configuration, excludeAudio: Bool
+  ) async throws {
     let remoteFolder = "\(config.path)/\(tail)/"
     try await run(
       "/usr/bin/ssh",
       strictSSHArguments(host: config.host) + ["mkdir", "-p", remoteFolder])
     try await sync(
       folder: folder, destination: "\(config.host):\(remoteFolder)", remotely: true,
-      excludeState: false)
+      excludeState: false, excludeAudio: excludeAudio)
   }
 
   /// Compares filesystem identity, so symlinked paths that point at the same
@@ -650,13 +657,14 @@ actor RemoteSyncService {
   }
 
   private func sync(
-    folder: URL, destination: String, remotely: Bool, excludeState: Bool = false
+    folder: URL, destination: String, remotely: Bool, excludeState: Bool = false,
+    excludeAudio: Bool = false
   ) async throws {
     let config = configuration
     var arguments = [
       "-az", "--partial", "--delete-delay", "--delete-excluded", "--exclude", "*.tmp",
     ]
-    if !config.includeAudio { arguments += ["--exclude", "*.wav"] }
+    if !config.includeAudio || excludeAudio { arguments += ["--exclude", "*.wav"] }
     if remotely { arguments += ["-e", strictSSHCommand] }
     // The machine state stays off the remote host: nothing there reads it,
     // and it duplicates the full transcript. The local archive keeps it
