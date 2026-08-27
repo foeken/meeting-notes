@@ -10,12 +10,13 @@ enum TanaEntityMatcher {
   static func relevantNames(
     from entityNames: [String], meeting: MeetingDocument, limit: Int = 200
   ) -> [String] {
-    let source = ([meeting.title]
-      + [meeting.calendar?.organizer?.name].compactMap { $0 }
-      + (meeting.calendar?.participants.map(\.name) ?? [])
-      + meeting.transcript.map(\.speaker)
-      + meeting.transcript.map(\.text))
-      .joined(separator: " ")
+    let organizerName: [String] = [meeting.calendar?.organizer?.name].compactMap { $0 }
+    let participantNames: [String] = meeting.calendar?.participants.map(\.name) ?? []
+    let speakerNames: [String] = meeting.transcript.map(\.speaker)
+    let transcriptTexts: [String] = meeting.transcript.map(\.text)
+    let sourceWordsList: [String] =
+      [meeting.title] + organizerName + participantNames + speakerNames + transcriptTexts
+    let source = sourceWordsList.joined(separator: " ")
     let sourceWords = normalize(source).split(separator: " ").map(String.init)
     let spokenWords = Set(sourceWords.filter { $0.count >= 4 })
     guard !spokenWords.isEmpty else { return [] }
