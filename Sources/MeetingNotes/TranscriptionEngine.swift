@@ -1,5 +1,6 @@
 import FluidAudio
 import Foundation
+import os
 
 actor NemotronTranscriber {
   struct Segment: Sendable {
@@ -14,6 +15,8 @@ actor NemotronTranscriber {
     let segments: [Segment]
   }
 
+  static let logger = Logger(subsystem: "app.meetingnotes.menu", category: "TranscriptionEngine")
+
   private static let language = "auto"
   private static let chunkMilliseconds = 1_120
   private static let sampleRate = 16_000
@@ -26,6 +29,7 @@ actor NemotronTranscriber {
       sharedModels = try await loadingTask.value
       return
     }
+    let started = ContinuousClock.now
     let task = Task {
       try await StreamingNemotronMultilingualAsrManager.downloadAndPreloadShared(
         languageCode: Self.language,
@@ -35,8 +39,13 @@ actor NemotronTranscriber {
     do {
       sharedModels = try await task.value
       loadingTask = nil
+      Self.logger.info(
+        "Nemotron model ready in \(started.duration(to: .now), privacy: .public)")
     } catch {
       loadingTask = nil
+      Self.logger.error(
+        "Nemotron model load failed after \(started.duration(to: .now), privacy: .public): \(String(describing: error), privacy: .public)"
+      )
       throw error
     }
   }
@@ -98,11 +107,26 @@ actor NemotronTranscriber {
   }
 
   nonisolated static func appendedText(previous: String, current: String) -> String {
+    appendedTextDiagnosing(previous: previous, current: current).text
+  }
+
+  /// Same diff as `appendedText`, but also reports whether `current` was a
+  /// clean continuation of `previous` (the streaming model only grew its
+  /// hypothesis) or a revision (the model rewrote earlier tokens, so the
+  /// "new" text below the common prefix is not necessarily new speech —
+  /// it can restate/correct words already emitted in a prior, now-closed
+  /// turn). Kept separate from `appendedText` so existing callers that only
+  /// need the text are unaffected.
+  nonisolated static func appendedTextDiagnosing(
+    previous: String, current: String
+  ) -> (text: String, isContinuation: Bool) {
     let old = previous.trimmingCharacters(in: .whitespacesAndNewlines)
     let new = current.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !new.isEmpty, new != old else { return "" }
+    guard !new.isEmpty, new != old else { return ("", true) }
     if new.hasPrefix(old) {
-      return String(new.dropFirst(old.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+      return (
+        String(new.dropFirst(old.count)).trimmingCharacters(in: .whitespacesAndNewlines), true
+      )
     }
     var oldIndex = old.startIndex
     var newIndex = new.startIndex
@@ -110,7 +134,7 @@ actor NemotronTranscriber {
       old.formIndex(after: &oldIndex)
       new.formIndex(after: &newIndex)
     }
-    return String(new[newIndex...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    return (String(new[newIndex...]).trimmingCharacters(in: .whitespacesAndNewlines), false)
   }
 
   private func appendDelta(
@@ -238,6 +262,12 @@ struct SerialAudioBatchQueue: Sendable {
 actor LiveTranscriptionEngine {
   typealias TurnHandler = @Sendable (TranscriptTurn) async -> Void
 
+  private static let logger = Logger(subsystem: "app.meetingnotes.menu", category: "LiveTranscription")
+  /// Chunks are ~1.12s each; 20 in a row with no recognized delta is roughly
+  /// 22s of silence-from-the-model's-perspective while audio keeps flowing —
+  /// long enough to flag as a possible stall rather than a quiet pause.
+  private static let staleDeltaWarningThreshold = 20
+
   private struct StreamState {
     var manager: StreamingNemotronMultilingualAsrManager?
     var openAISession: OpenAILiveSession?
@@ -253,6 +283,12 @@ actor LiveTranscriptionEngine {
     // Stable id for the growing sentence: every delta re-emits the same turn
     // so the preview updates in place instead of stacking fragments.
     var pendingTurnID: UUID?
+    // Diagnostics only — do not drive behavior off these, they exist so a
+    // stall or a run of ASR-session errors shows up in Console.app instead
+    // of silently freezing live.md.
+    var consecutiveDrainErrors = 0
+    var chunksSinceLastDelta = 0
+    var turnsEmitted = 0
   }
 
   private let transcriber: NemotronTranscriber
@@ -367,12 +403,30 @@ actor LiveTranscriptionEngine {
         guard running, self.sessionID == sessionID else { return }
         let partial = await manager.getPartialTranscript()
         guard running, self.sessionID == sessionID else { return }
+        let priorErrors = states[source]?.consecutiveDrainErrors ?? 0
+        if priorErrors > 0 {
+          Self.logger.info(
+            "[\(source.rawValue, privacy: .public)] ASR session recovered after \(priorErrors, privacy: .public) error(s)"
+          )
+          states[source, default: StreamState()].consecutiveDrainErrors = 0
+        }
         await emitNewText(partial, source: source, sessionID: sessionID)
       } catch {
         // The WAV capture remains the source of truth. Finalization retries with
         // a fresh Nemotron session if a live preview prediction fails.
         guard running, self.sessionID == sessionID else { return }
-        states[source, default: StreamState()].manager = nil
+        var errored = states[source, default: StreamState()]
+        errored.manager = nil
+        errored.consecutiveDrainErrors += 1
+        states[source] = errored
+        Self.logger.warning(
+          "[\(source.rawValue, privacy: .public)] ASR session error (attempt \(errored.consecutiveDrainErrors, privacy: .public) in a row): \(String(describing: error), privacy: .public)"
+        )
+        if errored.consecutiveDrainErrors == 3 {
+          Self.logger.error(
+            "[\(source.rawValue, privacy: .public)] ASR session has failed 3 times in a row — live preview for this source is effectively stalled while it keeps retrying"
+          )
+        }
       }
     }
 
@@ -430,12 +484,34 @@ actor LiveTranscriptionEngine {
   ) async {
     guard running, self.sessionID == sessionID else { return }
     var state = states[source, default: StreamState()]
-    let delta = NemotronTranscriber.appendedText(previous: state.transcript, current: currentText)
+    let diagnosed = NemotronTranscriber.appendedTextDiagnosing(
+      previous: state.transcript, current: currentText)
+    let delta = diagnosed.text
     state.transcript = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !delta.isEmpty else {
+      state.chunksSinceLastDelta += 1
+      if state.chunksSinceLastDelta > 0,
+        state.chunksSinceLastDelta.isMultiple(of: Self.staleDeltaWarningThreshold)
+      {
+        Self.logger.warning(
+          "[\(source.rawValue, privacy: .public)] no new transcript text in \(state.chunksSinceLastDelta, privacy: .public) chunks (~\(Double(state.chunksSinceLastDelta) * 1.12, format: .fixed(precision: 0), privacy: .public)s) despite audio flowing — live.md may look stalled"
+        )
+      }
       states[source] = state
       return
     }
+    if !diagnosed.isContinuation {
+      // The model rewrote text below the common prefix instead of only
+      // extending it. If that overlaps a turn already closed and persisted
+      // (see MeetingStore.append, which only replaces by matching id), this
+      // "delta" restates words that already made it into live.md/meeting.md
+      // as a separate turn — the likely source of duplicate/near-duplicate
+      // lines at the same timestamp.
+      Self.logger.warning(
+        "[\(source.rawValue, privacy: .public)] ASR revised its own hypothesis instead of extending it — emitted delta may duplicate an already-closed turn: \"\(delta.prefix(80), privacy: .public)\""
+      )
+    }
+    state.chunksSinceLastDelta = 0
     let end = Double(state.wavPosition ?? state.sampleCount) / 16_000
     let rawText = VocabularyTextCorrector.apply(to: delta)
     let text = FillerWordSettingsStore.load() ? FillerWordFilter.apply(rawText) : rawText
@@ -482,7 +558,11 @@ actor LiveTranscriptionEngine {
         id: turnID, start: start, end: end,
         speaker: "Unknown", text: state.pendingText, source: source)
     }
+    state.turnsEmitted += 1
     states[source] = state
+    Self.logger.debug(
+      "[\(source.rawValue, privacy: .public)] turn #\(state.turnsEmitted, privacy: .public) emitted (closed=\(closedTurn != nil, privacy: .public), growing=\(growingTurn != nil, privacy: .public))"
+    )
     if let closedTurn { await onTurn?(closedTurn) }
     if let growingTurn { await onTurn?(growingTurn) }
   }

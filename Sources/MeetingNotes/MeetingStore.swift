@@ -1295,6 +1295,12 @@ actor MeetingStore {
       }
     } else {
       try atomicWrite(Data(MarkdownRenderer.renderLive(meeting).utf8), to: liveURL)
+      // Diagnostic only: correlates against TranscriptionEngine's per-source
+      // logs to confirm whether live.md truly stops being written, or the
+      // live preview UI is just showing a stale cached slice.
+      Self.logger.debug(
+        "live.md written — \(meeting.transcript.count, privacy: .public) turns, folder=\(folder.lastPathComponent, privacy: .public)"
+      )
     }
     try atomicWrite(encoder.encode(meeting), to: stateURL)
     try Data(UUID().uuidString.utf8).write(
