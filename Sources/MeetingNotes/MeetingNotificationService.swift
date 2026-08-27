@@ -1,5 +1,5 @@
 import Foundation
-import UserNotifications
+@preconcurrency import UserNotifications
 
 @MainActor
 final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
@@ -179,8 +179,12 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
   ) {
     let actionIdentifier = response.actionIdentifier
     completionHandler()
-    Task { @MainActor [weak self] in
-      guard let self else { return }
+    // A singleton (`static let shared`) never needs `[weak self]` here — there
+    // is no owner for it to outlive, so a strong capture is harmless and
+    // sidesteps a Swift 6.1 toolchain issue where `[weak self]` inside a
+    // `nonisolated`-to-`@MainActor` hop gets misdiagnosed as an invalid
+    // declaration.
+    Task { @MainActor in
       switch actionIdentifier {
       case startRecordingActionIdentifier:
         onStartRecording?()

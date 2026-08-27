@@ -1700,10 +1700,64 @@ private struct MicrophoneSettingsPane: View {
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
           }
         }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 10) {
+          Text("System Audio Capture")
+            .font(.headline)
+          Text(
+            "Exclude specific apps from the system-audio channel — useful for virtual-mic "
+              + "tools (Audio Hijack, Loopback, etc.) whose processed output would otherwise be "
+              + "captured as if it were a call participant, since system-audio capture works "
+              + "per-app rather than per-device."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+          if !model.systemAudioExcludedApps.isEmpty {
+            VStack(spacing: 0) {
+              ForEach(Array(model.systemAudioExcludedApps.enumerated()), id: \.element.id) {
+                index, app in
+                HStack(spacing: 10) {
+                  Image(systemName: "speaker.slash")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                  Text(app.name)
+                  Spacer()
+                  Button("Restore") { model.restoreSystemAudioApp(app) }
+                    .buttonStyle(.borderless)
+                }
+                .padding(.vertical, 9)
+                if index < model.systemAudioExcludedApps.count - 1 { Divider() }
+              }
+            }
+            .padding(.horizontal, 12)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+          }
+
+          let excludedIDs = Set(model.systemAudioExcludedApps.map(\.bundleIdentifier))
+          let candidates = model.systemAudioAvailableApps.filter {
+            !excludedIDs.contains($0.bundleIdentifier)
+          }
+          Menu("Exclude an App…") {
+            if candidates.isEmpty {
+              Text("No other running apps detected")
+            } else {
+              ForEach(candidates) { app in
+                Button(app.name) { model.excludeSystemAudioApp(app) }
+              }
+            }
+          }
+          .fixedSize()
+        }
       }
       .padding(28)
     }
-    .onAppear(perform: model.refreshMicrophoneDevices)
+    .onAppear {
+      model.refreshMicrophoneDevices()
+      model.refreshSystemAudioApps()
+    }
   }
 }
 
