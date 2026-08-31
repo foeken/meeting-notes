@@ -757,51 +757,112 @@ actor RemoteSyncService {
     return url
   }
 
+  /// A wedged rsync/ssh child (seen in practice: an openrsync process that
+  /// stopped making progress but never exited) must not be allowed to block
+  /// this actor's serial flush loop forever — that starves every later
+  /// meeting's sync indefinitely, silently, until the app is relaunched.
+  static let subprocessTimeout: Duration = .seconds(180)
+
   private func run(
-    _ executable: String, _ arguments: [String], environment: [String: String]? = nil
+    _ executable: String, _ arguments: [String], environment: [String: String]? = nil,
+    timeout: Duration = RemoteSyncService.subprocessTimeout
   ) async throws {
-    try await withCheckedThrowingContinuation { continuation in
-      let process = Process()
-      let errorPipe = Pipe()
-      process.executableURL = URL(fileURLWithPath: executable)
-      process.arguments = arguments
-      if let environment { process.environment = environment }
-      process.standardOutput = FileHandle.nullDevice
-      process.standardError = errorPipe
-      // Drain stderr while the process runs; waiting until termination can
-      // deadlock once the child fills the 64KB pipe buffer.
-      let drained = DrainedData()
-      errorPipe.fileHandleForReading.readabilityHandler = { handle in
-        let chunk = handle.availableData
-        if chunk.isEmpty {
-          handle.readabilityHandler = nil
-        } else {
-          drained.append(chunk)
-        }
+    let process = Process()
+    let errorPipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    if let environment { process.environment = environment }
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = errorPipe
+    // Drain stderr while the process runs; waiting until termination can
+    // deadlock once the child fills the 64KB pipe buffer.
+    let drained = DrainedData()
+    errorPipe.fileHandleForReading.readabilityHandler = { handle in
+      let chunk = handle.availableData
+      if chunk.isEmpty {
+        handle.readabilityHandler = nil
+      } else {
+        drained.append(chunk)
       }
-      process.terminationHandler = { process in
-        errorPipe.fileHandleForReading.readabilityHandler = nil
-        // Collect any remainder that arrived between the last callback and exit.
-        if let rest = try? errorPipe.fileHandleForReading.readToEnd() {
-          drained.append(rest)
+    }
+
+    // Both the termination handler and the timeout task race to resume the
+    // continuation; this gate makes sure only the first one wins.
+    let settled = SettleGate()
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        process.terminationHandler = { process in
+          errorPipe.fileHandleForReading.readabilityHandler = nil
+          // Collect any remainder that arrived between the last callback and exit.
+          if let rest = try? errorPipe.fileHandleForReading.readToEnd() {
+            drained.append(rest)
+          }
+          guard settled.claim() else { return }
+          let data = drained.value
+          if process.terminationStatus == 0 {
+            continuation.resume()
+          } else {
+            let detail = String(data: data, encoding: .utf8)?.trimmingCharacters(
+              in: .whitespacesAndNewlines)
+            continuation.resume(
+              throwing: NSError(
+                domain: "RemoteSync", code: Int(process.terminationStatus),
+                userInfo: [
+                  NSLocalizedDescriptionKey: detail?.isEmpty == false ? detail! : "Remote sync failed"
+                ]
+              ))
+          }
         }
-        let data = drained.value
-        if process.terminationStatus == 0 {
-          continuation.resume()
-        } else {
-          let detail = String(data: data, encoding: .utf8)?.trimmingCharacters(
-            in: .whitespacesAndNewlines)
+        do {
+          try process.run()
+        } catch {
+          if settled.claim() { continuation.resume(throwing: error) }
+          return
+        }
+        Task {
+          try? await Task.sleep(for: timeout)
+          guard settled.claim() else { return }
+          errorPipe.fileHandleForReading.readabilityHandler = nil
+          Self.forceTerminate(process)
           continuation.resume(
             throwing: NSError(
-              domain: "RemoteSync", code: Int(process.terminationStatus),
+              domain: "RemoteSync", code: -1001,
               userInfo: [
-                NSLocalizedDescriptionKey: detail?.isEmpty == false ? detail! : "Remote sync failed"
+                NSLocalizedDescriptionKey:
+                  "\((executable as NSString).lastPathComponent) timed out after \(timeout)"
               ]
             ))
         }
       }
-      do { try process.run() } catch { continuation.resume(throwing: error) }
+    } onCancel: {
+      Self.forceTerminate(process)
     }
+  }
+
+  /// SIGTERM first; escalate to SIGKILL if the child (or a grandchild it
+  /// spawned, e.g. rsync's own remote-side copy) ignores it.
+  private static func forceTerminate(_ process: Process) {
+    guard process.isRunning else { return }
+    process.terminate()
+    Task {
+      try? await Task.sleep(for: .seconds(5))
+      if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+    }
+  }
+}
+
+/// Lets exactly one of two racing callbacks (process termination vs. timeout)
+/// win the continuation; the loser becomes a no-op instead of a crash.
+private final class SettleGate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var claimed = false
+
+  func claim() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    if claimed { return false }
+    claimed = true
+    return true
   }
 }
 
