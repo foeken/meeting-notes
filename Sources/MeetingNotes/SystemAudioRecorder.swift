@@ -106,8 +106,15 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
     configuration.sampleRate = 16_000
     configuration.channelCount = 1
     configuration.excludesCurrentProcessAudio = true
+    let excludedIdentifiers = SystemAudioExclusionStore.excludedBundleIdentifiers()
+    let excludedApps =
+      excludedIdentifiers.isEmpty
+      ? []
+      : content.applications.filter { excludedIdentifiers.contains($0.bundleIdentifier) }
     let stream = SCStream(
-      filter: SCContentFilter(display: display, excludingWindows: []), configuration: configuration,
+      filter: SCContentFilter(
+        display: display, excludingApplications: excludedApps, exceptingWindows: []),
+      configuration: configuration,
       delegate: nil)
     try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
     try await stream.startCapture()

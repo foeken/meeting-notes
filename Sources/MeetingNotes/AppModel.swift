@@ -74,6 +74,8 @@ final class AppModel {
   var keepAudioAfterProcessing = AudioRetentionSettingsStore.load()
   var useSystemDefaultMicrophone = MicrophoneSettingsStore.useSystemDefault()
   var microphoneDevices = MicrophoneSettingsStore.devices()
+  var systemAudioExcludedApps = SystemAudioExclusionStore.excludedApps()
+  var systemAudioAvailableApps: [ExcludedAudioApp] = []
   var meetingDetectionEnabled = MeetingDetectionSettingsStore.load()
   var detectedMeetingApp: String?
   var removeFillerWords = FillerWordSettingsStore.load()
@@ -1564,6 +1566,25 @@ final class AppModel {
     guard !device.isConnected else { return }
     microphoneDevices.removeAll { $0.id == device.id }
     MicrophoneSettingsStore.saveDevices(microphoneDevices)
+  }
+
+  func refreshSystemAudioApps() {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      self.systemAudioAvailableApps = await SystemAudioAppProvider.runningApps()
+    }
+  }
+
+  func excludeSystemAudioApp(_ app: ExcludedAudioApp) {
+    guard !systemAudioExcludedApps.contains(where: { $0.bundleIdentifier == app.bundleIdentifier })
+    else { return }
+    systemAudioExcludedApps.append(app)
+    SystemAudioExclusionStore.save(systemAudioExcludedApps)
+  }
+
+  func restoreSystemAudioApp(_ app: ExcludedAudioApp) {
+    systemAudioExcludedApps.removeAll { $0.bundleIdentifier == app.bundleIdentifier }
+    SystemAudioExclusionStore.save(systemAudioExcludedApps)
   }
 
   var canAddVocabularyEntry: Bool {
