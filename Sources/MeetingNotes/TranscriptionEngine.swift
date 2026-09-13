@@ -508,7 +508,7 @@ actor LiveTranscriptionEngine {
       // as a separate turn — the likely source of duplicate/near-duplicate
       // lines at the same timestamp.
       Self.logger.warning(
-        "[\(source.rawValue, privacy: .public)] ASR revised its own hypothesis instead of extending it — emitted delta may duplicate an already-closed turn: \"\(delta.prefix(80), privacy: .public)\""
+        "[\(source.rawValue, privacy: .public)] ASR revised its own hypothesis instead of extending it — emitted delta may duplicate an already-closed turn"
       )
     }
     state.chunksSinceLastDelta = 0

@@ -1299,7 +1299,7 @@ actor MeetingStore {
       // logs to confirm whether live.md truly stops being written, or the
       // live preview UI is just showing a stale cached slice.
       Self.logger.debug(
-        "live.md written — \(meeting.transcript.count, privacy: .public) turns, folder=\(folder.lastPathComponent, privacy: .public)"
+        "live.md written — \(meeting.transcript.count, privacy: .public) turns"
       )
     }
     try atomicWrite(encoder.encode(meeting), to: stateURL)
