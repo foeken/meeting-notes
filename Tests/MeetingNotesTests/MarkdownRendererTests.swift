@@ -2209,3 +2209,51 @@ import Testing
   guard HookHeaderKeychainStore.save(headers) else { return }
   #expect(HookHeaderKeychainStore.load() == headers)
 }
+
+// MARK: - Subprocess Timeout Tests
+
+@Test func subprocessResumeGuardAllowsOnlyOneClaim() {
+  let guard1 = SubprocessResumeGuard()
+  #expect(guard1.claim() == true)
+  #expect(guard1.claim() == false)
+  #expect(guard1.claim() == false)
+}
+
+@Test func subprocessResumeGuardIsThreadSafe() async {
+  let guard1 = SubprocessResumeGuard()
+  let claimCount = ClaimCounter()
+
+  await withTaskGroup(of: Void.self) { group in
+    for _ in 0..<100 {
+      group.addTask {
+        if guard1.claim() {
+          claimCount.increment()
+        }
+      }
+    }
+  }
+
+  #expect(claimCount.value == 1)
+}
+
+@Test func remoteSyncServiceHasReasonableTimeoutDefaults() {
+  #expect(RemoteSyncService.defaultSubprocessTimeout == 300)
+  #expect(RemoteSyncService.killGracePeriod == 5)
+}
+
+private final class ClaimCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var count = 0
+
+  func increment() {
+    lock.lock()
+    count += 1
+    lock.unlock()
+  }
+
+  var value: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return count
+  }
+}

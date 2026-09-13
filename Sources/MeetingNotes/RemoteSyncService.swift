@@ -757,8 +757,12 @@ actor RemoteSyncService {
     return url
   }
 
+  static let defaultSubprocessTimeout: TimeInterval = 300
+  static let killGracePeriod: TimeInterval = 5
+
   private func run(
-    _ executable: String, _ arguments: [String], environment: [String: String]? = nil
+    _ executable: String, _ arguments: [String], environment: [String: String]? = nil,
+    timeout: TimeInterval = RemoteSyncService.defaultSubprocessTimeout
   ) async throws {
     try await withCheckedThrowingContinuation { continuation in
       let process = Process()
@@ -779,8 +783,36 @@ actor RemoteSyncService {
           drained.append(chunk)
         }
       }
-      process.terminationHandler = { process in
+
+      let resumeGuard = SubprocessResumeGuard()
+
+      let watchdogItem = DispatchWorkItem { [weak process] in
+        guard let process, process.isRunning else { return }
+        guard resumeGuard.claim() else { return }
         errorPipe.fileHandleForReading.readabilityHandler = nil
+        process.terminate()
+        DispatchQueue.global(qos: .utility).asyncAfter(
+          deadline: .now() + Self.killGracePeriod
+        ) { [weak process] in
+          if let process, process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+          }
+        }
+        continuation.resume(
+          throwing: NSError(
+            domain: "RemoteSync", code: -1001,
+            userInfo: [
+              NSLocalizedDescriptionKey:
+                "Subprocess timed out after \(Int(timeout)) seconds and was terminated"
+            ]))
+      }
+      DispatchQueue.global(qos: .utility).asyncAfter(
+        deadline: .now() + timeout, execute: watchdogItem)
+
+      process.terminationHandler = { process in
+        watchdogItem.cancel()
+        errorPipe.fileHandleForReading.readabilityHandler = nil
+        guard resumeGuard.claim() else { return }
         // Collect any remainder that arrived between the last callback and exit.
         if let rest = try? errorPipe.fileHandleForReading.readToEnd() {
           drained.append(rest)
@@ -800,7 +832,12 @@ actor RemoteSyncService {
             ))
         }
       }
-      do { try process.run() } catch { continuation.resume(throwing: error) }
+      do {
+        try process.run()
+      } catch {
+        watchdogItem.cancel()
+        if resumeGuard.claim() { continuation.resume(throwing: error) }
+      }
     }
   }
 }
@@ -821,6 +858,21 @@ private final class DrainedData: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     return data
+  }
+}
+
+/// Guards a checked continuation against double resumption when both the
+/// timeout watchdog and the termination handler race.
+final class SubprocessResumeGuard: @unchecked Sendable {
+  private let lock = NSLock()
+  private var resumed = false
+
+  func claim() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    if resumed { return false }
+    resumed = true
+    return true
   }
 }
 
