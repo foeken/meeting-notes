@@ -5,6 +5,11 @@ ROOT=${0:A:h:h}
 APP="$ROOT/Meeting Notes.app"
 EXECUTABLE="$APP/Contents/MacOS/MeetingNotes"
 POINTER="$HOME/Library/Application Support/MeetingNotes/Spool/current.json"
+CI_ONLY=false
+if [[ "${1:-}" == "--ci" ]]; then
+  CI_ONLY=true
+  export MEETING_NOTES_CODE_SIGN_IDENTITY=-
+fi
 
 if [[ "${1:-}" == "--recover-running-meeting" ]]; then
   if pgrep -x MeetingNotes >/dev/null; then
@@ -44,6 +49,7 @@ if [[ "${1:-}" == "--recover-running-meeting" ]]; then
   exit 9
 fi
 
+if [[ "$CI_ONLY" == false ]]; then
 if [[ -f "$POINTER" ]]; then
   ACTIVE=$(plutil -extract active raw -o - "$POINTER" 2>/dev/null || echo false)
   CAPTURE_STATE=$(plutil -extract captureState raw -o - "$POINTER" 2>/dev/null || echo unknown)
@@ -64,6 +70,8 @@ done
 if pgrep -x MeetingNotes >/dev/null; then
   echo "error: an old Meeting Notes process did not stop" >&2
   exit 3
+fi
+
 fi
 
 echo "Running strict tests…"
@@ -87,6 +95,11 @@ fi
 "$ROOT/scripts/build-app.sh"
 codesign --verify --deep --strict --verbose=2 "$APP"
 plutil -lint "$APP/Contents/Info.plist"
+
+if [[ "$CI_ONLY" == true ]]; then
+  echo "CI build and verification complete"
+  exit 0
+fi
 
 echo "Launching one fresh instance…"
 open -n "$APP"
