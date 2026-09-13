@@ -757,70 +757,17 @@ actor RemoteSyncService {
     return url
   }
 
+  /// A wedged rsync/ssh child (seen in practice: an openrsync process that
+  /// stopped making progress but never exited) must not be allowed to block
+  /// this actor's serial flush loop forever — that starves every later
+  /// meeting's sync indefinitely, silently, until the app is relaunched.
+  static let subprocessTimeout: Duration = .seconds(180)
+
   private func run(
-    _ executable: String, _ arguments: [String], environment: [String: String]? = nil
+    _ executable: String, _ arguments: [String], environment: [String: String]? = nil,
+    timeout: Duration = RemoteSyncService.subprocessTimeout
   ) async throws {
-    try await withCheckedThrowingContinuation { continuation in
-      let process = Process()
-      let errorPipe = Pipe()
-      process.executableURL = URL(fileURLWithPath: executable)
-      process.arguments = arguments
-      if let environment { process.environment = environment }
-      process.standardOutput = FileHandle.nullDevice
-      process.standardError = errorPipe
-      // Drain stderr while the process runs; waiting until termination can
-      // deadlock once the child fills the 64KB pipe buffer.
-      let drained = DrainedData()
-      errorPipe.fileHandleForReading.readabilityHandler = { handle in
-        let chunk = handle.availableData
-        if chunk.isEmpty {
-          handle.readabilityHandler = nil
-        } else {
-          drained.append(chunk)
-        }
-      }
-      process.terminationHandler = { process in
-        errorPipe.fileHandleForReading.readabilityHandler = nil
-        // Collect any remainder that arrived between the last callback and exit.
-        if let rest = try? errorPipe.fileHandleForReading.readToEnd() {
-          drained.append(rest)
-        }
-        let data = drained.value
-        if process.terminationStatus == 0 {
-          continuation.resume()
-        } else {
-          let detail = String(data: data, encoding: .utf8)?.trimmingCharacters(
-            in: .whitespacesAndNewlines)
-          continuation.resume(
-            throwing: NSError(
-              domain: "RemoteSync", code: Int(process.terminationStatus),
-              userInfo: [
-                NSLocalizedDescriptionKey: detail?.isEmpty == false ? detail! : "Remote sync failed"
-              ]
-            ))
-        }
-      }
-      do { try process.run() } catch { continuation.resume(throwing: error) }
-    }
-  }
-}
-
-/// Accumulates pipe output across the readability handler's callback queue and
-/// the termination handler without data races.
-private final class DrainedData: @unchecked Sendable {
-  private let lock = NSLock()
-  private var data = Data()
-
-  func append(_ chunk: Data) {
-    lock.lock()
-    data.append(chunk)
-    lock.unlock()
-  }
-
-  var value: Data {
-    lock.lock()
-    defer { lock.unlock() }
-    return data
+    try await SyncSubprocess.run(executable, arguments, environment: environment, timeout: timeout)
   }
 }
 
