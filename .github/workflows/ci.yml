@@ -1,0 +1,40 @@
+name: macOS CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, codex/macos-ci-dependabot]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Show toolchain
+        run: |
+          uname -m
+          xcodebuild -version
+          swift --version
+      - name: Test, build, and verify app
+        run: ./scripts/stable-build.sh --ci
+      - name: Subprocess regression checks
+        if: hashFiles('scripts/test-sync-subprocess.swift') != ''
+        run: |
+          swiftc -swift-version 6 -warnings-as-errors -parse-as-library Sources/MeetingNotes/SyncSubprocess.swift scripts/test-sync-subprocess.swift -o "$RUNNER_TEMP/test-sync-subprocess"
+          "$RUNNER_TEMP/test-sync-subprocess"
+      - name: Shell and plist checks
+        run: |
+          for script in scripts/*.sh; do zsh -n "$script"; done
+          plutil -lint Resources/Info.plist Resources/Entitlements.plist
+          git diff --exit-code
