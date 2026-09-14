@@ -1,24 +1,24 @@
 {
-  "originHash": "fa730b2b86825b910b85100c7d7d972329f3b0821dd33180463d104016489ea8",
-  "pins": [
+  "originHash" : "a13cd1f3ad6a91e10d2727cee3a4628f796a9dfbde22ec74f8473e2b2565a0c5",
+  "pins" : [
     {
-      "identity": "fluidaudio",
-      "kind": "remoteSourceControl",
-      "location": "https://github.com/FluidInference/FluidAudio.git",
-      "state": {
-        "revision": "4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b",
-        "version": "0.15.6"
+      "identity" : "fluidaudio",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/FluidInference/FluidAudio.git",
+      "state" : {
+        "revision" : "41540ea237350afe5117a082b5c28eda642d0612",
+        "version" : "0.15.7"
       }
     },
     {
-      "identity": "sparkle",
-      "kind": "remoteSourceControl",
-      "location": "https://github.com/sparkle-project/Sparkle",
-      "state": {
-        "revision": "ac2def288cbff5cfc7df3ffef6abdf45b72bcb0a",
-        "version": "2.9.6"
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "ac2def288cbff5cfc7df3ffef6abdf45b72bcb0a",
+        "version" : "2.9.6"
       }
     }
   ],
-  "version": 3
+  "version" : 3
 }
