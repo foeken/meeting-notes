@@ -185,14 +185,25 @@ enum CodexThreadService {
 
   static func executableURL() -> URL? {
     let manager = FileManager.default
-    let candidates = [
-      NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")?
-        .appending(path: "Contents/Resources/codex"),
-      URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
-      URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
+    let home = manager.homeDirectoryForCurrentUser
+    let apps = [
+      NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex"),
+      URL(fileURLWithPath: "/Applications/ChatGPT.app"),
+      URL(fileURLWithPath: "/Applications/Codex.app"),
+    ].compactMap { $0 }
+    // The ChatGPT app moved its bundled CLI into codex-cli/bin; older Codex
+    // app builds keep it directly in Resources.
+    let bundled = apps.flatMap { app in
+      ["Contents/Resources/codex-cli/bin/codex", "Contents/Resources/codex"]
+        .map { app.appending(path: $0) }
+    }
+    let installed = [
       URL(fileURLWithPath: "/opt/homebrew/bin/codex"),
       URL(fileURLWithPath: "/usr/local/bin/codex"),
-    ].compactMap { $0 }
+      home.appending(path: ".local/bin/codex"),
+      home.appending(path: ".bun/bin/codex"),
+    ]
+    let candidates = bundled + installed
     return candidates.first { manager.isExecutableFile(atPath: $0.path) }
   }
 
