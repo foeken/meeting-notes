@@ -119,16 +119,7 @@ actor ChatGPTAuthService {
   }
 
   private var executableURL: URL? {
-    let home = fileManager.homeDirectoryForCurrentUser
-    let candidates = [
-      "/Applications/ChatGPT.app/Contents/Resources/codex",
-      "/Applications/Codex.app/Contents/Resources/codex",
-      "/opt/homebrew/bin/codex",
-      "/usr/local/bin/codex",
-      home.appending(path: ".local/bin/codex").path,
-      home.appending(path: ".bun/bin/codex").path,
-    ]
-    return candidates.first(where: fileManager.isExecutableFile(atPath:)).map(URL.init(fileURLWithPath:))
+    CodexThreadService.executableURL()
   }
 
   private func run(

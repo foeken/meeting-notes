@@ -185,15 +185,33 @@ enum CodexThreadService {
 
   static func executableURL() -> URL? {
     let manager = FileManager.default
-    let candidates = [
-      NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")?
-        .appending(path: "Contents/Resources/codex"),
-      URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
-      URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
+    let home = manager.homeDirectoryForCurrentUser
+    let apps = [
+      NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex"),
+      URL(fileURLWithPath: "/Applications/ChatGPT.app"),
+      URL(fileURLWithPath: "/Applications/Codex.app"),
+    ].compactMap { $0 }
+    let installed = [
       URL(fileURLWithPath: "/opt/homebrew/bin/codex"),
       URL(fileURLWithPath: "/usr/local/bin/codex"),
-    ].compactMap { $0 }
+      home.appending(path: ".local/bin/codex"),
+      home.appending(path: ".bun/bin/codex"),
+    ]
+    let candidates = apps.flatMap(bundledExecutableCandidates(in:)) + installed
     return candidates.first { manager.isExecutableFile(atPath: $0.path) }
+  }
+
+  /// The ChatGPT app ships its CLI in codex-cli/ and names the executable in
+  /// codex-package.json, so a future rename only needs the manifest updated.
+  /// Older Codex app builds kept the binary directly in Resources.
+  static func bundledExecutableCandidates(in app: URL) -> [URL] {
+    let resources = app.appending(path: "Contents/Resources")
+    let package = resources.appending(path: "codex-cli")
+    let entrypoint = (try? Data(contentsOf: package.appending(path: "codex-package.json")))
+      .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["entrypoint"]
+      as? String
+    return [entrypoint.map { package.appending(path: $0) }, resources.appending(path: "codex")]
+      .compactMap { $0 }
   }
 
   /// The OpenAI mark, used wherever the app surfaces ChatGPT.

@@ -124,6 +124,21 @@ import Testing
   #expect(queue.takeNext() == [6])
 }
 
+@Test func bundledCodexExecutableFollowsThePackageManifest() throws {
+  let app = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString)/ChatGPT.app")
+  defer { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()) }
+  let package = app.appending(path: "Contents/Resources/codex-cli")
+  try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+  try Data(#"{"entrypoint": "bin/renamed-codex"}"#.utf8)
+    .write(to: package.appending(path: "codex-package.json"))
+
+  #expect(
+    CodexThreadService.bundledExecutableCandidates(in: app) == [
+      package.appending(path: "bin/renamed-codex"),
+      app.appending(path: "Contents/Resources/codex"),
+    ])
+}
+
 @Test func chatGPTInstructionIncludesTheActualTranscriptPrompt() {
   let prompt = "TRANSCRIPT\\n[00:00:05] You: Ship the fix."
   let instruction = ChatGPTAuthService.instruction(prompt: prompt)
@@ -312,7 +327,8 @@ import Testing
   scheduler.update(
     recordingMeetingApp: "Zoom", detectedMeetingApp: nil, isCapturing: true,
     gracePeriod: .milliseconds(20), stop: stop)
-  try await Task.sleep(for: .milliseconds(40))
+  // Busy CI runners can delay the 20 ms timer well past 40 ms; poll instead.
+  for _ in 0..<200 where stopCount == 0 { try await Task.sleep(for: .milliseconds(10)) }
   #expect(stopCount == 1)
 }
 
