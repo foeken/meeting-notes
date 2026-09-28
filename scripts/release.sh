@@ -111,8 +111,15 @@ fi
 generate_feed() {
   local output="$1"
   shift
+  # Read the existing key through the stable macOS security tool. This keeps
+  # Keychain authorization tied to /usr/bin/security rather than a new
+  # generate_appcast binary every time Sparkle is updated.
+  security find-generic-password \
+    -a meeting-notes-menu \
+    -l "Private key for signing Sparkle updates" \
+    -w |
   "$SPARKLE_BIN/generate_appcast" \
-    --account meeting-notes-menu \
+    --ed-key-file - \
     --download-url-prefix "https://github.com/$RELEASE_REPO/releases/download/v$VERSION/" \
     --maximum-versions 1 \
     --maximum-deltas 0 \
