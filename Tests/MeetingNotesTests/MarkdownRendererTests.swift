@@ -327,7 +327,8 @@ import Testing
   scheduler.update(
     recordingMeetingApp: "Zoom", detectedMeetingApp: nil, isCapturing: true,
     gracePeriod: .milliseconds(20), stop: stop)
-  try await Task.sleep(for: .milliseconds(40))
+  // Busy CI runners can delay the 20 ms timer well past 40 ms; poll instead.
+  for _ in 0..<200 where stopCount == 0 { try await Task.sleep(for: .milliseconds(10)) }
   #expect(stopCount == 1)
 }
 
