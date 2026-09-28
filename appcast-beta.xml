@@ -6,24 +6,24 @@
         <description>Signed application updates for Meeting Notes, including beta builds.</description>
         <language>en</language>
         <item>
-            <title>1.3.1</title>
-            <pubDate>Mon, 10 Aug 2026 14:52:30 +0200</pubDate>
-            <sparkle:version>9</sparkle:version>
-            <sparkle:shortVersionString>1.3.1</sparkle:shortVersionString>
+            <title>1.3.2</title>
+            <pubDate>Mon, 28 Sep 2026 12:32:23 +0200</pubDate>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>1.3.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## Meeting Notes 1.3.1
+            <description sparkle:format="markdown"><![CDATA[## Meeting Notes 1.3.2
 
-### Fixes
-- Automatic update checks now actually start at launch. Previously the updater only ran after clicking "Check for Updates…" manually, so background updates never arrived.
-- Clean Up can now remove leftover empty audio files from unfinished captures.
+- **Send to ChatGPT works again with the updated ChatGPT app.** The new ChatGPT desktop app moved its bundled Codex tool, so Meeting Notes reported that Codex was not installed. It now finds the tool wherever the app ships it.
+- Summaries use the same lookup, so they also work on Macs without a separately installed Codex CLI.
+- Recording can now exclude specific apps from system audio.
+- Recordings pause after a long stretch of silence.
+- Syncing can no longer hang forever on a stuck rsync or SSH connection.
+- Meeting content is kept out of diagnostic logs.
+- Updated Sparkle to 2.10.0 and FluidAudio to 0.15.7.
 
-### New
-- Floating subtitles: an optional slim bar above the Dock showing the live transcript while recording (Settings → Transcriptions).
-- When a detected video call ends while you are still recording, a notification suggests stopping the recording.
-- The app version is shown at the bottom of the "…" menu.
 ]]></description>
-            <enclosure url="https://github.com/foeken/meeting-notes/releases/download/v1.3.1/MeetingNotes-1.3.1.dmg" length="5421884" type="application/octet-stream" sparkle:edSignature="iL9nncXL5iCTeQLrH0Is1Rx6Xd5OBGKGCz91c1Osz9nqovq9w+6rY59YQS+JK9ECNh2nGJN9zLIt+oKfP06cDw=="/>
+            <enclosure url="https://github.com/foeken/meeting-notes/releases/download/v1.3.2/MeetingNotes-1.3.2.dmg" length="11856680" type="application/octet-stream" sparkle:edSignature="PeRAt7G2sEr4WkmmNrc0L5WBe7nct5hF97aZeGlJO+WQbF+4EIhKG14yfm9b3F1nn/MbYBGy/gM8isHBDIpVAA=="/>
         </item>
         <item>
             <title>1.3.0-beta.1</title>
