@@ -8,7 +8,7 @@ let package = Package(
     .executable(name: "MeetingNotes", targets: ["MeetingNotes"])
   ],
   dependencies: [
-    .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.7"),
+    .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.4"),
     .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
   ],
   targets: [
