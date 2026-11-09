@@ -9,7 +9,7 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.7"),
-    .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
+    .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.1"),
   ],
   targets: [
     .executableTarget(
