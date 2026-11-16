@@ -18,8 +18,9 @@ actor NemotronTranscriber {
   static let logger = Logger(subsystem: "app.meetingnotes.menu", category: "TranscriptionEngine")
 
   private static let language = "auto"
-  private static let chunkMilliseconds = 1_120
-  private static let sampleRate = 16_000
+  static let chunkMilliseconds = 1_120
+  static let sampleRate = 16_000
+  static let samplesPerChunk = sampleRate * chunkMilliseconds / 1_000
   private var sharedModels: SharedNemotronMultilingualModels?
   private var loadingTask: Task<SharedNemotronMultilingualModels, Error>?
 
@@ -66,8 +67,7 @@ actor NemotronTranscriber {
     defer { try? handle.close() }
     try handle.seek(toOffset: 44)
 
-    let samplesPerChunk = Self.sampleRate * Self.chunkMilliseconds / 1_000
-    let bytesPerChunk = samplesPerChunk * MemoryLayout<Int16>.size
+    let bytesPerChunk = Self.samplesPerChunk * MemoryLayout<Int16>.size
     var sampleCount = 0
     var emittedThrough: TimeInterval = 0
     var previousText = ""
@@ -232,20 +232,35 @@ enum VocabularyTextCorrector {
 /// mutates one shared audio buffer, so concurrent calls can advance its read
 /// offset twice and trap during buffer compaction.
 struct SerialAudioBatchQueue: Sendable {
+  private let samplesPerBatch: Int
   private var pending: [Int16] = []
+  private var pendingStart = 0
   private(set) var isDraining = false
+
+  init(samplesPerBatch: Int) {
+    precondition(samplesPerBatch > 0)
+    self.samplesPerBatch = samplesPerBatch
+  }
 
   mutating func enqueue(_ samples: [Int16]) -> Bool {
     pending.append(contentsOf: samples)
-    guard !isDraining else { return false }
+    guard !isDraining, pending.count - pendingStart >= samplesPerBatch else { return false }
     isDraining = true
     return true
   }
 
   mutating func takeNext() -> [Int16]? {
-    guard !pending.isEmpty else { return nil }
-    let batch = pending
-    pending.removeAll(keepingCapacity: true)
+    guard pending.count - pendingStart >= samplesPerBatch else { return nil }
+    let end = pendingStart + samplesPerBatch
+    let batch = Array(pending[pendingStart..<end])
+    pendingStart = end
+    if pendingStart == pending.count {
+      pending.removeAll(keepingCapacity: true)
+      pendingStart = 0
+    } else if pendingStart >= samplesPerBatch * 8 {
+      pending.removeFirst(pendingStart)
+      pendingStart = 0
+    }
     return batch
   }
 
@@ -255,6 +270,7 @@ struct SerialAudioBatchQueue: Sendable {
 
   mutating func cancel() {
     pending.removeAll(keepingCapacity: false)
+    pendingStart = 0
     isDraining = false
   }
 }
@@ -275,7 +291,7 @@ actor LiveTranscriptionEngine {
     var wavPosition: Int?
     var emittedThrough: TimeInterval = 0
     var transcript = ""
-    var queue = SerialAudioBatchQueue()
+    var queue = SerialAudioBatchQueue(samplesPerBatch: NemotronTranscriber.samplesPerChunk)
     // Delta text held back until a sentence boundary, so the preview shows
     // whole sentences instead of chunk-sized fragments.
     var pendingText = ""

@@ -111,17 +111,51 @@ import Testing
 }
 
 @Test func nemotronLiveAudioUsesOnlyOneDrainLoopPerStream() {
-  var queue = SerialAudioBatchQueue()
+  var queue = SerialAudioBatchQueue(samplesPerBatch: 4)
 
-  #expect(queue.enqueue([1, 2]) == true)
-  #expect(queue.enqueue([3]) == false)
-  #expect(queue.enqueue([4, 5]) == false)
-  #expect(queue.takeNext() == [1, 2, 3, 4, 5])
+  #expect(queue.enqueue([1, 2]) == false)
+  #expect(queue.enqueue([3, 4, 5]) == true)
+  #expect(queue.takeNext() == [1, 2, 3, 4])
+
+  // Capture can keep appending while the model processes the first batch.
+  // Every model call must still receive exactly one configured window, and
+  // the samples that crossed the enqueue boundary must remain in order.
+  #expect(queue.enqueue([6, 7, 8]) == false)
+  #expect(queue.takeNext() == [5, 6, 7, 8])
   #expect(queue.takeNext() == nil)
 
   queue.finishDraining()
-  #expect(queue.enqueue([6]) == true)
-  #expect(queue.takeNext() == [6])
+  #expect(queue.enqueue([9, 10, 11]) == false)
+  #expect(queue.enqueue([12]) == true)
+  #expect(queue.takeNext() == [9, 10, 11, 12])
+}
+
+@Test func nemotronLiveAudioDiscardsOnlyTheStopTimeRemainder() {
+  var queue = SerialAudioBatchQueue(samplesPerBatch: 4)
+
+  #expect(queue.enqueue([1, 2, 3]) == false)
+  queue.cancel()
+
+  #expect(queue.enqueue([4, 5, 6]) == false)
+  #expect(queue.enqueue([7]) == true)
+  #expect(queue.takeNext() == [4, 5, 6, 7])
+}
+
+@Test func nemotronLiveAudioRechunksLargeBurstsWithoutLoss() {
+  var queue = SerialAudioBatchQueue(samplesPerBatch: 4)
+  let burst = (0..<35).map(Int16.init)
+
+  #expect(queue.enqueue(burst) == true)
+  var drained: [Int16] = []
+  while let batch = queue.takeNext() {
+    #expect(batch.count == 4)
+    drained.append(contentsOf: batch)
+  }
+  #expect(drained == Array(burst.prefix(32)))
+
+  queue.finishDraining()
+  #expect(queue.enqueue([35]) == true)
+  #expect(queue.takeNext() == [32, 33, 34, 35])
 }
 
 @Test func bundledCodexExecutableFollowsThePackageManifest() throws {
